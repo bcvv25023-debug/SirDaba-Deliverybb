@@ -6,6 +6,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 import 'package:permission_handler/permission_handler.dart';
@@ -188,7 +189,36 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
           'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 SirDabaApp/1.0 SirDaba-App-Android-Agent')
       ..addJavaScriptChannel('SirDabaFlutter',
           onMessageReceived: _onJsMessage)
-      ..setGeolocationPermissionsPromptCallbacks(
+      ..setNavigationDelegate(NavigationDelegate(
+        onPageStarted: (_) => setState(() => _loading = true),
+        onPageFinished: _onPageFinished,
+        onWebResourceError: (error) {
+          debugPrint('WebView error: ${error.description}');
+          setState(() => _loading = false);
+        },
+        onNavigationRequest: (request) {
+          final url = request.url;
+          if (url.contains('sirdaba.delivery')) {
+            return NavigationDecision.navigate;
+          }
+          if (url.contains('maps.google.com') ||
+              url.contains('google.com/maps') ||
+              url.contains('accounts.google.com') ||
+              url.startsWith('geo:') ||
+              url.startsWith('tel:') ||
+              url.startsWith('mailto:') ||
+              url.startsWith('whatsapp:')) {
+            return NavigationDecision.navigate;
+          }
+          return NavigationDecision.navigate;
+        },
+      ))
+      ..loadRequest(Uri.parse('$kSiteUrl/'));
+
+    // Android-specific: geolocation permission
+    final platform = _wvc.platform;
+    if (platform is AndroidWebViewController) {
+      platform.setGeolocationPermissionsPromptCallbacks(
         onShowPrompt: (request) async {
           LocationPermission perm = await Geolocator.checkPermission();
           if (perm == LocationPermission.denied ||
@@ -203,43 +233,15 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
           );
         },
         onHidePrompt: () {},
-      )
-      ..setNavigationDelegate(NavigationDelegate(
-        onPageStarted: (_) => setState(() => _loading = true),
-        onPageFinished: _onPageFinished,
-        onWebResourceError: (error) {
-          debugPrint('WebView error: ${error.description}');
-          setState(() => _loading = false);
-        },
-        onNavigationRequest: (request) {
-          final url = request.url;
-          // Allow all sirdaba.delivery URLs
-          if (url.contains('sirdaba.delivery')) {
-            return NavigationDecision.navigate;
-          }
-          // Allow Google Maps & OAuth
-          if (url.contains('maps.google.com') ||
-              url.contains('google.com/maps') ||
-              url.contains('accounts.google.com') ||
-              url.startsWith('geo:') ||
-              url.startsWith('tel:') ||
-              url.startsWith('mailto:') ||
-              url.startsWith('whatsapp:')) {
-            return NavigationDecision.navigate;
-          }
-          return NavigationDecision.navigate;
-        },
-      ))
-      ..loadRequest(Uri.parse('$kSiteUrl/'));
+      );
+    }
   }
 
   void _onPageFinished(String url) {
     setState(() => _loading = false);
 
-    // Inject geolocation bridge + check login cookie
     _wvc.runJavaScript('''
       (function() {
-        // Geolocation bridge
         if (typeof window._sirdabaGeoPatched === 'undefined') {
           window._sirdabaGeoPatched = true;
           if (!navigator.geolocation || !window.isSecureContext) {
@@ -260,7 +262,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
           }
         }
 
-        // Check app token cookie
         var appToken = '';
         var cookies = document.cookie.split(';');
         for (var i = 0; i < cookies.length; i++) {
@@ -391,7 +392,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
       await _wvc.runJavaScript("localStorage.setItem('fcm_token','$token');");
     } catch (_) {}
 
-    // Try to get app token from cookie
     try {
       await _wvc.runJavaScript('''
         (function() {
