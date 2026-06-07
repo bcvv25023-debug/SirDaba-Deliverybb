@@ -12,6 +12,7 @@ import 'package:http/http.dart' as http;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:image_picker/image_picker.dart';
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
@@ -197,6 +198,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
   String? _fcmToken;
   bool _tokenRegistered = false;
 
+  // ✅ image_picker instance
+  final ImagePicker _imagePicker = ImagePicker();
+
   @override
   void initState() {
     super.initState();
@@ -241,11 +245,38 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
         request.grant();
       });
 
-      // ✅ رفع الصور — نطلب الإذن ونخلي WebView يفتح native file picker
+      // ✅ FIX: رفع الصور — نفتح native picker ونرجع المسار الحقيقي
       platform.setOnShowFileSelector((params) async {
-        await Permission.photos.request();
-        await Permission.storage.request();
-        return const <String>[];
+        try {
+          // طلب الأذونات أولاً
+          await Permission.photos.request();
+          await Permission.storage.request();
+
+          // فتح dialog للاختيار بين الكاميرا والمعرض
+          final source = await _showImageSourceDialog();
+          if (source == null) return const <String>[];
+
+          XFile? pickedFile;
+
+          if (source == ImageSource.camera) {
+            await Permission.camera.request();
+            pickedFile = await _imagePicker.pickImage(
+              source: ImageSource.camera,
+              imageQuality: 85,
+            );
+          } else {
+            pickedFile = await _imagePicker.pickImage(
+              source: ImageSource.gallery,
+              imageQuality: 85,
+            );
+          }
+
+          if (pickedFile == null) return const <String>[];
+          return <String>[pickedFile.path];
+        } catch (e) {
+          debugPrint('File selector error: $e');
+          return const <String>[];
+        }
       });
 
       platform.setGeolocationPermissionsPromptCallbacks(
@@ -265,6 +296,50 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
         onHidePrompt: () {},
       );
     }
+  }
+
+  // ✅ Dialog لاختيار مصدر الصورة
+  Future<ImageSource?> _showImageSourceDialog() async {
+    return await showModalBottomSheet<ImageSource>(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 12),
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'اختر مصدر الصورة',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 12),
+            ListTile(
+              leading: const Icon(Icons.camera_alt, color: Color(0xFFE8821A)),
+              title: const Text('التقاط صورة'),
+              onTap: () => Navigator.pop(ctx, ImageSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library, color: Color(0xFFE8821A)),
+              title: const Text('اختيار من المعرض'),
+              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
   }
 
   void _handleIntentUrl(String intentUrl) async {
