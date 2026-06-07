@@ -234,6 +234,12 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
 
     final platform = _wvc.platform;
     if (platform is AndroidWebViewController) {
+      // ✅ إذن الكاميرا للـ WebView (QR / Barcode scanner)
+      platform.setOnPlatformPermissionRequest((request) async {
+        await Permission.camera.request();
+        request.grant();
+      });
+
       platform.setGeolocationPermissionsPromptCallbacks(
         onShowPrompt: (request) async {
           LocationPermission perm = await Geolocator.checkPermission();
