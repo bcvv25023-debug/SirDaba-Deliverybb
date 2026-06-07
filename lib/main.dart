@@ -59,7 +59,6 @@ Future<void> _requestAllPermissions() async {
   if (await Permission.storage.isDenied) await Permission.storage.request();
 }
 
-// فتح روابط خارجية عبر Android
 Future<void> _launchExternalUrl(String url) async {
   try {
     final uri = Uri.parse(url);
@@ -220,26 +219,19 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
         },
         onNavigationRequest: (request) {
           final url = request.url;
-
-          // روابط خارجية — مررها لـ Android مباشرة
           if (_isExternalUrl(url)) {
             _launchExternalUrl(url);
             return NavigationDecision.prevent;
           }
-
-          // intent:// scheme معالجة خاصة
           if (url.startsWith('intent://')) {
             _handleIntentUrl(url);
             return NavigationDecision.prevent;
           }
-
-          // السماح لكل روابط الموقع
           return NavigationDecision.navigate;
         },
       ))
       ..loadRequest(Uri.parse('$kSiteUrl/'));
 
-    // Android geolocation
     final platform = _wvc.platform;
     if (platform is AndroidWebViewController) {
       platform.setGeolocationPermissionsPromptCallbacks(
@@ -261,22 +253,17 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     }
   }
 
-  // معالجة intent:// URLs (Google Maps وغيرها)
   void _handleIntentUrl(String intentUrl) async {
     try {
-      // استخرج fallback_url من intent
       final fallbackMatch =
           RegExp(r'S\.browser_fallback_url=([^;]+)').firstMatch(intentUrl);
       if (fallbackMatch != null) {
-        final fallback =
-            Uri.decodeComponent(fallbackMatch.group(1) ?? '');
+        final fallback = Uri.decodeComponent(fallbackMatch.group(1) ?? '');
         if (fallback.isNotEmpty) {
           await _launchExternalUrl(fallback);
           return;
         }
       }
-
-      // حاول تحويل intent:// لـ https://
       final converted = intentUrl
           .replaceFirst('intent://', 'https://')
           .split(';')[0]
@@ -289,7 +276,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
 
   void _onPageFinished(String url) {
     setState(() => _loading = false);
-
     _wvc.runJavaScript('''
       (function() {
         if (typeof window._sirdabaGeoPatched === 'undefined') {
@@ -311,7 +297,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
             };
           }
         }
-
         var appToken = '';
         var cookies = document.cookie.split(';');
         for (var i = 0; i < cookies.length; i++) {
@@ -396,29 +381,21 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
 
   Future<void> _initFCM() async {
     final m = FirebaseMessaging.instance;
-
-    // طلب صريح للإشعارات مع channel
     await m.requestPermission(
       alert: true,
       badge: true,
       sound: true,
       provisional: false,
     );
-
-    // تأكد من تفعيل الـ channel
     await flutterLocalNotificationsPlugin
         .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>()
         ?.createNotificationChannel(channel);
-
     final token = await m.getToken();
     if (token != null) await _handleNewToken(token);
     m.onTokenRefresh.listen(_handleNewToken);
-
-    // foreground notifications
     FirebaseMessaging.onMessage.listen((msg) {
       final n = msg.notification;
-      final a = n?.android;
       if (n != null) {
         flutterLocalNotificationsPlugin.show(
           n.hashCode,
@@ -438,7 +415,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
         );
       }
     });
-
     FirebaseMessaging.onMessageOpenedApp.listen(_handleTap);
     final init = await m.getInitialMessage();
     if (init != null) _handleTap(init);
@@ -449,57 +425,36 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     await prefs.setString('fcm_token', token);
     _fcmToken = token;
     _tokenRegistered = false;
-
+    await _sendFcmTokenToServer(token);
     try {
       await _wvc.runJavaScript("localStorage.setItem('fcm_token','$token');");
-    } catch (_) {}
-
-    try {
-      await _wvc.runJavaScript('''
-        (function() {
-          var appToken = '';
-          var cookies = document.cookie.split(';');
-          for (var i = 0; i < cookies.length; i++) {
-            var c = cookies[i].trim();
-            if (c.startsWith('sirdaba_app_token=')) {
-              appToken = c.substring('sirdaba_app_token='.length);
-              break;
-            }
-          }
-          if (appToken) {
-            window.SirDabaFlutter.postMessage(JSON.stringify({
-              type: 'app_token',
-              token: decodeURIComponent(appToken)
-            }));
-          }
-        })();
-      ''');
     } catch (_) {}
   }
 
   Future<void> _registerFcmTokenWithAuth(
       String fcmToken, String appToken) async {
+    await _sendFcmTokenToServer(fcmToken);
+  }
+
+  Future<void> _sendFcmTokenToServer(String fcmToken) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final oldToken = prefs.getString('fcm_token_registered') ?? '';
+      final lastRegistered = prefs.getString('fcm_token_registered') ?? '';
+      if (lastRegistered == fcmToken) return;
       final response = await http.post(
-        Uri.parse('$kSiteUrl/wp-json/sirdaba/v1/mobile/device-token'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $appToken',
-        },
-        body: jsonEncode({
-          'token': fcmToken,
+        Uri.parse('$kSiteUrl/wp-json/sirdaba/v1/mobile/register-fcm-token'),
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: {
+          'fcm_token': fcmToken,
           'platform': 'android',
-          'app_version': '1.0.2',
-          if (oldToken.isNotEmpty && oldToken != fcmToken)
-            'old_token': oldToken,
-        }),
+        },
       );
       if (response.statusCode == 200) {
         _tokenRegistered = true;
         await prefs.setString('fcm_token_registered', fcmToken);
         debugPrint('FCM token registered ✅');
+      } else {
+        debugPrint('FCM register failed: ${response.statusCode}');
       }
     } catch (e) {
       debugPrint('FCM register error: $e');
