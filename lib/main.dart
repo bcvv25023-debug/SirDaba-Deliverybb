@@ -126,7 +126,6 @@ class _SplashScreenState extends State<SplashScreen>
         curve: const Interval(0.0, 0.5, curve: Curves.easeIn)));
     _ctrl.forward();
 
-    // ✅ Splash سريع — الأذونات تشتغل بالتوازي مع الـ Timer
     Future.wait([
       _requestAllPermissions(),
       Future.delayed(const Duration(milliseconds: 1500)),
@@ -242,12 +241,11 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
         request.grant();
       });
 
-      // ✅ رفع الصور والملفات من WebView
+      // ✅ رفع الصور — نطلب الإذن ونخلي WebView يفتح native file picker
       platform.setOnShowFileSelector((params) async {
         await Permission.photos.request();
         await Permission.storage.request();
-        // نرجع list فارغة — WebView غادي يفتح file picker ديالو
-        return [];
+        return const <String>[];
       });
 
       platform.setGeolocationPermissionsPromptCallbacks(
