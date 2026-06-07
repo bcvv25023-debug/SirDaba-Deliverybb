@@ -197,8 +197,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
   bool _loading = true;
   String? _fcmToken;
   bool _tokenRegistered = false;
-
-  // ✅ image_picker instance
   final ImagePicker _imagePicker = ImagePicker();
 
   @override
@@ -239,20 +237,17 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
 
     final platform = _wvc.platform;
     if (platform is AndroidWebViewController) {
-      // ✅ إذن الكاميرا للـ WebView
       platform.setOnPlatformPermissionRequest((request) async {
         await Permission.camera.request();
         request.grant();
       });
 
-      // ✅ FIX: رفع الصور — نفتح native picker ونرجع المسار الحقيقي
+      // ✅ FIX: إرجاع URI صحيح للـ WebView
       platform.setOnShowFileSelector((params) async {
         try {
-          // طلب الأذونات أولاً
           await Permission.photos.request();
           await Permission.storage.request();
 
-          // فتح dialog للاختيار بين الكاميرا والمعرض
           final source = await _showImageSourceDialog();
           if (source == null) return const <String>[];
 
@@ -272,7 +267,10 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
           }
 
           if (pickedFile == null) return const <String>[];
-          return <String>[pickedFile.path];
+
+          // ✅ إرجاع URI بدل path مباشر
+          final uri = Uri.file(pickedFile.path).toString();
+          return <String>[uri];
         } catch (e) {
           debugPrint('File selector error: $e');
           return const <String>[];
@@ -298,7 +296,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     }
   }
 
-  // ✅ Dialog لاختيار مصدر الصورة
   Future<ImageSource?> _showImageSourceDialog() async {
     return await showModalBottomSheet<ImageSource>(
       context: context,
