@@ -118,25 +118,27 @@ class _SplashScreenState extends State<SplashScreen>
   void initState() {
     super.initState();
     _ctrl = AnimationController(
-        duration: const Duration(milliseconds: 1200), vsync: this);
-    _scale = Tween<double>(begin: 0.6, end: 1.0).animate(
-        CurvedAnimation(parent: _ctrl, curve: Curves.elasticOut));
+        duration: const Duration(milliseconds: 900), vsync: this);
+    _scale = Tween<double>(begin: 0.7, end: 1.0).animate(
+        CurvedAnimation(parent: _ctrl, curve: Curves.easeOutBack));
     _fade = Tween<double>(begin: 0.0, end: 1.0).animate(CurvedAnimation(
         parent: _ctrl,
         curve: const Interval(0.0, 0.5, curve: Curves.easeIn)));
     _ctrl.forward();
 
-    _requestAllPermissions().then((_) {
-      Timer(const Duration(seconds: 2), () {
-        if (mounted) {
-          Navigator.of(context).pushReplacement(PageRouteBuilder(
-            pageBuilder: (_, __, ___) => const MainWebViewScreen(),
-            transitionsBuilder: (_, a, __, c) =>
-                FadeTransition(opacity: a, child: c),
-            transitionDuration: const Duration(milliseconds: 500),
-          ));
-        }
-      });
+    // ✅ Splash سريع — الأذونات تشتغل بالتوازي مع الـ Timer
+    Future.wait([
+      _requestAllPermissions(),
+      Future.delayed(const Duration(milliseconds: 1500)),
+    ]).then((_) {
+      if (mounted) {
+        Navigator.of(context).pushReplacement(PageRouteBuilder(
+          pageBuilder: (_, __, ___) => const MainWebViewScreen(),
+          transitionsBuilder: (_, a, __, c) =>
+              FadeTransition(opacity: a, child: c),
+          transitionDuration: const Duration(milliseconds: 400),
+        ));
+      }
     });
   }
 
@@ -161,8 +163,8 @@ class _SplashScreenState extends State<SplashScreen>
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Image.asset('assets/images/logo.png',
-                      width: 260, height: 260, fit: BoxFit.contain),
-                  const SizedBox(height: 32),
+                      width: 220, height: 220, fit: BoxFit.contain),
+                  const SizedBox(height: 28),
                   const Text('SirDaba Delivery',
                       style: TextStyle(
                           fontSize: 26,
@@ -171,7 +173,7 @@ class _SplashScreenState extends State<SplashScreen>
                   const SizedBox(height: 8),
                   const Text('توصيل سريع وموثوق',
                       style: TextStyle(fontSize: 14, color: Color(0xFF555555))),
-                  const SizedBox(height: 48),
+                  const SizedBox(height: 40),
                   const CircularProgressIndicator(
                       color: Color(0xFFE8821A), strokeWidth: 2.5),
                 ],
@@ -234,10 +236,18 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
 
     final platform = _wvc.platform;
     if (platform is AndroidWebViewController) {
-      // ✅ إذن الكاميرا للـ WebView (QR / Barcode scanner)
+      // ✅ إذن الكاميرا للـ WebView
       platform.setOnPlatformPermissionRequest((request) async {
         await Permission.camera.request();
         request.grant();
+      });
+
+      // ✅ رفع الصور والملفات من WebView
+      platform.setOnShowFileSelector((params) async {
+        await Permission.photos.request();
+        await Permission.storage.request();
+        // نرجع list فارغة — WebView غادي يفتح file picker ديالو
+        return [];
       });
 
       platform.setGeolocationPermissionsPromptCallbacks(
