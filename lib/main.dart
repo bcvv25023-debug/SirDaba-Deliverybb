@@ -252,6 +252,86 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     if (platform is AndroidWebViewController) {
       AndroidWebViewController.enableDebugging(false);
 
+      // ★ Fix: media playback — يمنع crash عند تحميل بعض الصفحات
+      platform.setMediaPlaybackRequiresUserGesture(false);
+
+      // ★ Fix: JS dialog handlers — بدونها WebView كيتجمد أو يخرج عند أي alert/confirm
+      platform.setOnJavaScriptAlertDialog((request) async {
+        try {
+          await showDialog<void>(
+            context: context,
+            barrierDismissible: false,
+            builder: (_) => AlertDialog(
+              content: Text(request.message),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('حسناً'),
+                ),
+              ],
+            ),
+          );
+        } catch (_) {}
+      });
+
+      platform.setOnJavaScriptConfirmDialog((request) async {
+        try {
+          final result = await showDialog<bool>(
+            context: context,
+            barrierDismissible: false,
+            builder: (_) => AlertDialog(
+              content: Text(request.message),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('إلغاء'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: const Text('تأكيد'),
+                ),
+              ],
+            ),
+          );
+          return result ?? false;
+        } catch (_) {
+          return false;
+        }
+      });
+
+      platform.setOnJavaScriptTextInputDialog((request) async {
+        final controller = TextEditingController(text: request.defaultText);
+        try {
+          final result = await showDialog<String>(
+            context: context,
+            barrierDismissible: false,
+            builder: (_) => AlertDialog(
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(request.message),
+                  const SizedBox(height: 8),
+                  TextField(controller: controller),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, null),
+                  child: const Text('إلغاء'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(context, controller.text),
+                  child: const Text('موافق'),
+                ),
+              ],
+            ),
+          );
+          return result ?? '';
+        } catch (_) {
+          return '';
+        }
+      });
+
       platform.setOnPlatformPermissionRequest((request) async {
         await Permission.camera.request();
         request.grant();
@@ -259,31 +339,34 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
 
       platform.setOnShowFileSelector((params) async {
         try {
-          await Permission.photos.request();
-          await Permission.storage.request();
+          // ★ Fix: permissions بدون await متسلسل — يمنع deadlock
+          await Future.wait([
+            Permission.photos.request(),
+            Permission.storage.request(),
+          ]).catchError((_) => <PermissionStatus>[]);
+
+          if (!mounted) return const <String>[];
 
           final source = await _showImageSourceDialog();
-          if (source == null) return const <String>[];
+          if (source == null || !mounted) return const <String>[];
 
           XFile? pickedFile;
-
           if (source == ImageSource.camera) {
-            await Permission.camera.request();
+            final camPerm = await Permission.camera.request();
+            if (!camPerm.isGranted) return const <String>[];
             pickedFile = await _imagePicker.pickImage(
               source: ImageSource.camera,
               imageQuality: 85,
-            );
+            ).catchError((_) => null);
           } else {
             pickedFile = await _imagePicker.pickImage(
               source: ImageSource.gallery,
               imageQuality: 85,
-            );
+            ).catchError((_) => null);
           }
 
           if (pickedFile == null) return const <String>[];
-
-          final uri = Uri.file(pickedFile.path).toString();
-          return <String>[uri];
+          return <String>[Uri.file(pickedFile.path).toString()];
         } catch (e) {
           debugPrint('File selector error: $e');
           return const <String>[];
