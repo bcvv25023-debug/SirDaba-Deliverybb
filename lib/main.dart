@@ -222,6 +222,10 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
         },
         onNavigationRequest: (request) {
           final url = request.url;
+          // ✅ FIX: السماح لكل روابط الموقع الداخلية بما فيها الصفحات والفورمز
+          if (url.startsWith(kSiteUrl) || url == 'about:blank') {
+            return NavigationDecision.navigate;
+          }
           if (_isExternalUrl(url)) {
             _launchExternalUrl(url);
             return NavigationDecision.prevent;
@@ -237,12 +241,25 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
 
     final platform = _wvc.platform;
     if (platform is AndroidWebViewController) {
+      // ✅ FIX: دعم window.open() و target="_blank"
+      AndroidWebViewController.enableDebugging(false);
+      platform.setOnCreateWindow((request) async {
+        final newUrl = request.url;
+        if (newUrl != null && newUrl.isNotEmpty && newUrl != 'about:blank') {
+          if (_isExternalUrl(newUrl)) {
+            await _launchExternalUrl(newUrl);
+          } else {
+            await _wvc.loadRequest(Uri.parse(newUrl));
+          }
+        }
+        return true;
+      });
+
       platform.setOnPlatformPermissionRequest((request) async {
         await Permission.camera.request();
         request.grant();
       });
 
-      // ✅ FIX: إرجاع URI صحيح للـ WebView
       platform.setOnShowFileSelector((params) async {
         try {
           await Permission.photos.request();
@@ -268,7 +285,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
 
           if (pickedFile == null) return const <String>[];
 
-          // ✅ إرجاع URI بدل path مباشر
           final uri = Uri.file(pickedFile.path).toString();
           return <String>[uri];
         } catch (e) {
@@ -364,6 +380,18 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     setState(() => _loading = false);
     _wvc.runJavaScript('''
       (function() {
+        // ✅ FIX: دعم window.open() - يفتح في نفس الـ WebView
+        if (typeof window._sirdabaPopupPatched === 'undefined') {
+          window._sirdabaPopupPatched = true;
+          var _origOpen = window.open;
+          window.open = function(url, target, features) {
+            if (url && url !== '' && url !== 'about:blank') {
+              window.location.href = url;
+              return null;
+            }
+            return _origOpen ? _origOpen.call(window, url, target, features) : null;
+          };
+        }
         if (typeof window._sirdabaGeoPatched === 'undefined') {
           window._sirdabaGeoPatched = true;
           if (!navigator.geolocation || !window.isSecureContext) {
