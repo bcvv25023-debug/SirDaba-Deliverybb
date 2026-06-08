@@ -222,7 +222,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
         },
         onNavigationRequest: (request) {
           final url = request.url;
-          // ✅ FIX: السماح لكل روابط الموقع الداخلية بما فيها الصفحات والفورمز
           if (url.startsWith(kSiteUrl) || url == 'about:blank') {
             return NavigationDecision.navigate;
           }
@@ -241,19 +240,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
 
     final platform = _wvc.platform;
     if (platform is AndroidWebViewController) {
-      // ✅ FIX: دعم window.open() و target="_blank"
       AndroidWebViewController.enableDebugging(false);
-      platform.setOnCreateWindow((request) async {
-        final newUrl = request.url;
-        if (newUrl != null && newUrl.isNotEmpty && newUrl != 'about:blank') {
-          if (_isExternalUrl(newUrl)) {
-            await _launchExternalUrl(newUrl);
-          } else {
-            await _wvc.loadRequest(Uri.parse(newUrl));
-          }
-        }
-        return true;
-      });
 
       platform.setOnPlatformPermissionRequest((request) async {
         await Permission.camera.request();
@@ -344,7 +331,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
               onTap: () => Navigator.pop(ctx, ImageSource.camera),
             ),
             ListTile(
-              leading: const Icon(Icons.photo_library, color: Color(0xFFE8821A)),
+              leading:
+                  const Icon(Icons.photo_library, color: Color(0xFFE8821A)),
               title: const Text('اختيار من المعرض'),
               onTap: () => Navigator.pop(ctx, ImageSource.gallery),
             ),
@@ -380,7 +368,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     setState(() => _loading = false);
     _wvc.runJavaScript('''
       (function() {
-        // ✅ FIX: دعم window.open() - يفتح في نفس الـ WebView
         if (typeof window._sirdabaPopupPatched === 'undefined') {
           window._sirdabaPopupPatched = true;
           var _origOpen = window.open;
@@ -391,6 +378,14 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
             }
             return _origOpen ? _origOpen.call(window, url, target, features) : null;
           };
+          document.addEventListener('click', function(e) {
+            var el = e.target;
+            while (el && el.tagName !== 'A') el = el.parentElement;
+            if (el && el.target === '_blank' && el.href) {
+              e.preventDefault();
+              window.location.href = el.href;
+            }
+          }, true);
         }
         if (typeof window._sirdabaGeoPatched === 'undefined') {
           window._sirdabaGeoPatched = true;
