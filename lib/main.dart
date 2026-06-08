@@ -50,14 +50,24 @@ Future<void> main() async {
 }
 
 Future<void> _requestAllPermissions() async {
-  await Permission.notification.request();
-  LocationPermission locationPerm = await Geolocator.checkPermission();
-  if (locationPerm == LocationPermission.denied) {
-    locationPerm = await Geolocator.requestPermission();
-  }
-  await Permission.camera.request();
-  if (await Permission.photos.isDenied) await Permission.photos.request();
-  if (await Permission.storage.isDenied) await Permission.storage.request();
+  try { await Permission.notification.request(); } catch (_) {}
+  try {
+    LocationPermission locationPerm = await Geolocator.checkPermission();
+    if (locationPerm == LocationPermission.denied) {
+      await Geolocator.requestPermission();
+    }
+  } catch (_) {}
+  try { await Permission.camera.request(); } catch (_) {}
+  try {
+    if (await Permission.photos.status != PermissionStatus.permanentlyDenied) {
+      await Permission.photos.request();
+    }
+  } catch (_) {}
+  try {
+    if (await Permission.storage.status != PermissionStatus.permanentlyDenied) {
+      await Permission.storage.request();
+    }
+  } catch (_) {}
 }
 
 Future<void> _launchExternalUrl(String url) async {
