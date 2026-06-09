@@ -72,17 +72,6 @@ Future<void> _launchExternalUrl(String url) async {
   }
 }
 
-// ✅ PERMANENT FIX: يتحقق إذا الـ URL صفحة تطبيق SirDaba (مشي الصفحة الرئيسية للموقع)
-bool _isAppUrl(String url) {
-  if (url.isEmpty) return false;
-  // الصفحة الرئيسية للموقع (/) مشي صفحة تطبيق — كتسبب الـ redirect
-  if (url == kSiteUrl || url == '$kSiteUrl/' || url == '$kSiteUrl/index.php') {
-    return false;
-  }
-  // أي صفحة sirdaba-* هي صفحة تطبيق آمنة
-  return url.startsWith(kSiteUrl) && url.contains('/sirdaba-');
-}
-
 bool _isExternalUrl(String url) {
   return url.startsWith('intent://') ||
       url.startsWith('tel:') ||
@@ -229,12 +218,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     _initFCM();
   }
 
-  void _initWebView() async {
-    // ✅ PERMANENT FIX: نحمل آخر URL زور فيه المستخدم — مشي الصفحة الرئيسية دايماً
-    final prefs = await SharedPreferences.getInstance();
-    final lastUrl = prefs.getString('last_url') ?? '';
-    final startUrl = _isAppUrl(lastUrl) ? lastUrl : '$kSiteUrl/sirdaba-home/';
-
+  void _initWebView() {
     _wvc = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setUserAgent(
@@ -245,11 +229,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
         onPageStarted: (url) {
           if (_firstLoad) {
             setState(() => _loading = true);
-          }
-          // ✅ PERMANENT FIX: نحفظ الـ URL الحالي إذا كان صفحة تطبيق
-          if (_isAppUrl(url)) {
-            SharedPreferences.getInstance()
-                .then((p) => p.setString('last_url', url));
           }
         },
         onPageFinished: _onPageFinished,
@@ -270,7 +249,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
           return NavigationDecision.navigate;
         },
       ))
-      ..loadRequest(Uri.parse(startUrl));
+      ..loadRequest(Uri.parse('$kSiteUrl/sirdaba-client/'));
 
     final platform = _wvc.platform;
     if (platform is AndroidWebViewController) {
