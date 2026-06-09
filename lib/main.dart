@@ -90,6 +90,13 @@ bool _isExternalUrl(String url) {
       url.startsWith('twitter:');
 }
 
+/// ✅ FIX 3: هل الـ URL ينتمي للموقع الخاص بنا؟
+bool _isSiteUrl(String url) {
+  return url.startsWith(kSiteUrl) ||
+      url.startsWith('https://sirdaba.delivery') ||
+      url.startsWith('http://sirdaba.delivery');
+}
+
 class SirDabaApp extends StatelessWidget {
   const SirDabaApp({super.key});
   @override
@@ -211,11 +218,20 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
   bool _tokenRegistered = false;
   final ImagePicker _imagePicker = ImagePicker();
 
+  // ✅ FIX 3: timeout لإخفاء الـ spinner إذا ما جاش onPageFinished
+  Timer? _loadingTimeoutTimer;
+
   @override
   void initState() {
     super.initState();
     _initWebView();
     _initFCM();
+  }
+
+  @override
+  void dispose() {
+    _loadingTimeoutTimer?.cancel();
+    super.dispose();
   }
 
   void _initWebView() {
@@ -227,17 +243,34 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
           onMessageReceived: _onJsMessage)
       ..setNavigationDelegate(NavigationDelegate(
         onPageStarted: (url) {
+          // spinner فقط في أول تحميل
           if (_firstLoad) {
             setState(() => _loading = true);
           }
+          // ✅ FIX 3: timeout 15 ثانية — إذا ما كمل التحميل نخفي الـ spinner
+          _loadingTimeoutTimer?.cancel();
+          _loadingTimeoutTimer = Timer(const Duration(seconds: 15), () {
+            if (mounted && _loading) {
+              setState(() {
+                _loading = false;
+                _firstLoad = false;
+              });
+            }
+          });
         },
         onPageFinished: _onPageFinished,
         onWebResourceError: (error) {
           debugPrint('WebView error: ${error.description}');
-          setState(() => _loading = false);
+          _loadingTimeoutTimer?.cancel();
+          setState(() {
+            _loading = false;
+            _firstLoad = false;
+          });
         },
         onNavigationRequest: (request) {
           final url = request.url;
+
+          // external schemes — open outside
           if (_isExternalUrl(url)) {
             _launchExternalUrl(url);
             return NavigationDecision.prevent;
@@ -246,6 +279,19 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
             _handleIntentUrl(url);
             return NavigationDecision.prevent;
           }
+
+          // ✅ FIX 3: أي رابط داخل الموقع — نسمح بالتنقل داخل الـ WebView
+          // حتى لو جاء من target="_blank" أو window.open
+          if (_isSiteUrl(url)) {
+            return NavigationDecision.navigate;
+          }
+
+          // روابط خارجية كاملة — نفتحها في المتصفح
+          if (url.startsWith('http://') || url.startsWith('https://')) {
+            _launchExternalUrl(url);
+            return NavigationDecision.prevent;
+          }
+
           return NavigationDecision.navigate;
         },
       ))
@@ -253,9 +299,23 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
 
     final platform = _wvc.platform;
     if (platform is AndroidWebViewController) {
+      // ✅ FIX 3: دعم target="_blank" و window.open() — نفتحها داخل نفس الـ WebView
+      AndroidWebViewController.enableDebugging(false);
       platform.setOnPlatformPermissionRequest((request) async {
         await Permission.camera.request();
         request.grant();
+      });
+
+      // ✅ FIX 3: window.open / target="_blank" → نحمل في نفس الـ WebView
+      platform.setOnCreateWindow((request) async {
+        final url = request.request.uri.toString();
+        if (url.isNotEmpty && _isSiteUrl(url)) {
+          _wvc.loadRequest(Uri.parse(url));
+        } else if (url.isNotEmpty &&
+            (url.startsWith('http://') || url.startsWith('https://'))) {
+          _launchExternalUrl(url);
+        }
+        return false; // false = لا تنشئ WebView جديد
       });
 
       platform.setOnShowFileSelector((params) async {
@@ -375,6 +435,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
   }
 
   void _onPageFinished(String url) {
+    _loadingTimeoutTimer?.cancel();
     setState(() {
       _loading = false;
       _firstLoad = false;
@@ -480,6 +541,22 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
             token: decodeURIComponent(appToken)
           }));
         }
+
+        // ===== FIX 3: intercept target=_blank links =====
+        if (typeof window._sirdabaLinkPatched === 'undefined') {
+          window._sirdabaLinkPatched = true;
+          document.addEventListener('click', function(e) {
+            var el = e.target;
+            while (el && el.tagName !== 'A') el = el.parentElement;
+            if (el && el.target === '_blank') {
+              var href = el.href;
+              if (href && href.startsWith('http')) {
+                e.preventDefault();
+                window.location.href = href;
+              }
+            }
+          }, true);
+        }
       })();
     ''');
   }
@@ -521,7 +598,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     final pickedDate = await showDatePicker(
       context: context,
       initialDate: initialDate,
-      firstDate: DateTime.now().subtract(const Duration(days: 0)),
+      // ✅ FIX 4: السماح بتواريخ ماضية (سنة كاملة للخلف)
+      firstDate: DateTime.now().subtract(const Duration(days: 365)),
       lastDate: DateTime.now().add(const Duration(days: 365)),
       builder: (context, child) {
         return Theme(
