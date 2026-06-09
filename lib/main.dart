@@ -50,24 +50,14 @@ Future<void> main() async {
 }
 
 Future<void> _requestAllPermissions() async {
-  try { await Permission.notification.request(); } catch (_) {}
-  try {
-    LocationPermission locationPerm = await Geolocator.checkPermission();
-    if (locationPerm == LocationPermission.denied) {
-      await Geolocator.requestPermission();
-    }
-  } catch (_) {}
-  try { await Permission.camera.request(); } catch (_) {}
-  try {
-    if (await Permission.photos.status != PermissionStatus.permanentlyDenied) {
-      await Permission.photos.request();
-    }
-  } catch (_) {}
-  try {
-    if (await Permission.storage.status != PermissionStatus.permanentlyDenied) {
-      await Permission.storage.request();
-    }
-  } catch (_) {}
+  await Permission.notification.request();
+  LocationPermission locationPerm = await Geolocator.checkPermission();
+  if (locationPerm == LocationPermission.denied) {
+    locationPerm = await Geolocator.requestPermission();
+  }
+  await Permission.camera.request();
+  if (await Permission.photos.isDenied) await Permission.photos.request();
+  if (await Permission.storage.isDenied) await Permission.storage.request();
 }
 
 Future<void> _launchExternalUrl(String url) async {
@@ -232,9 +222,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
         },
         onNavigationRequest: (request) {
           final url = request.url;
-          if (url.startsWith(kSiteUrl) || url == 'about:blank') {
-            return NavigationDecision.navigate;
-          }
           if (_isExternalUrl(url)) {
             _launchExternalUrl(url);
             return NavigationDecision.prevent;
@@ -246,90 +233,23 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
           return NavigationDecision.navigate;
         },
       ))
+      ..setOnConsoleMessage((msg) {
+        debugPrint('WebView console: ${msg.message}');
+      })
       ..loadRequest(Uri.parse('$kSiteUrl/'));
 
     final platform = _wvc.platform;
     if (platform is AndroidWebViewController) {
-      AndroidWebViewController.enableDebugging(false);
-
-      // ★ Fix: media playback — يمنع crash عند تحميل بعض الصفحات
-      platform.setMediaPlaybackRequiresUserGesture(false);
-
-      // ★ Fix: JS dialog handlers — بدونها WebView كيتجمد أو يخرج عند أي alert/confirm
-      platform.setOnJavaScriptAlertDialog((request) async {
-        try {
-          await showDialog<void>(
-            context: context,
-            barrierDismissible: false,
-            builder: (_) => AlertDialog(
-              content: Text(request.message),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('حسناً'),
-                ),
-              ],
-            ),
-          );
-        } catch (_) {}
-      });
-
-      platform.setOnJavaScriptConfirmDialog((request) async {
-        try {
-          final result = await showDialog<bool>(
-            context: context,
-            barrierDismissible: false,
-            builder: (_) => AlertDialog(
-              content: Text(request.message),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context, false),
-                  child: const Text('إلغاء'),
-                ),
-                TextButton(
-                  onPressed: () => Navigator.pop(context, true),
-                  child: const Text('تأكيد'),
-                ),
-              ],
-            ),
-          );
-          return result ?? false;
-        } catch (_) {
-          return false;
+      platform.setOnCreateWindow((request) async {
+        final url = request.url;
+        if (url != null && url.isNotEmpty) {
+          if (_isExternalUrl(url)) {
+            await _launchExternalUrl(url);
+          } else {
+            _wvc.loadRequest(Uri.parse(url));
+          }
         }
-      });
-
-      platform.setOnJavaScriptTextInputDialog((request) async {
-        final controller = TextEditingController(text: request.defaultText);
-        try {
-          final result = await showDialog<String>(
-            context: context,
-            barrierDismissible: false,
-            builder: (_) => AlertDialog(
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(request.message),
-                  const SizedBox(height: 8),
-                  TextField(controller: controller),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context, null),
-                  child: const Text('إلغاء'),
-                ),
-                TextButton(
-                  onPressed: () => Navigator.pop(context, controller.text),
-                  child: const Text('موافق'),
-                ),
-              ],
-            ),
-          );
-          return result ?? '';
-        } catch (_) {
-          return '';
-        }
+        return false;
       });
 
       platform.setOnPlatformPermissionRequest((request) async {
@@ -339,34 +259,26 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
 
       platform.setOnShowFileSelector((params) async {
         try {
-          // ★ Fix: permissions بدون await متسلسل — يمنع deadlock
-          await Future.wait([
-            Permission.photos.request(),
-            Permission.storage.request(),
-          ]).catchError((_) => <PermissionStatus>[]);
-
-          if (!mounted) return const <String>[];
-
+          await Permission.photos.request();
+          await Permission.storage.request();
           final source = await _showImageSourceDialog();
-          if (source == null || !mounted) return const <String>[];
-
+          if (source == null) return const <String>[];
           XFile? pickedFile;
           if (source == ImageSource.camera) {
-            final camPerm = await Permission.camera.request();
-            if (!camPerm.isGranted) return const <String>[];
+            await Permission.camera.request();
             pickedFile = await _imagePicker.pickImage(
               source: ImageSource.camera,
               imageQuality: 85,
-            ).catchError((_) => null);
+            );
           } else {
             pickedFile = await _imagePicker.pickImage(
               source: ImageSource.gallery,
               imageQuality: 85,
-            ).catchError((_) => null);
+            );
           }
-
           if (pickedFile == null) return const <String>[];
-          return <String>[Uri.file(pickedFile.path).toString()];
+          final uri = Uri.file(pickedFile.path).toString();
+          return <String>[uri];
         } catch (e) {
           debugPrint('File selector error: $e');
           return const <String>[];
@@ -461,25 +373,101 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     setState(() => _loading = false);
     _wvc.runJavaScript('''
       (function() {
-        if (typeof window._sirdabaPopupPatched === 'undefined') {
-          window._sirdabaPopupPatched = true;
+
+        // ✅ FIX 1: patch window.open
+        if (typeof window._sirdabaOpenPatched === 'undefined') {
+          window._sirdabaOpenPatched = true;
           var _origOpen = window.open;
           window.open = function(url, target, features) {
             if (url && url !== '' && url !== 'about:blank') {
               window.location.href = url;
-              return null;
+              return window;
             }
             return _origOpen ? _origOpen.call(window, url, target, features) : null;
           };
-          document.addEventListener('click', function(e) {
-            var el = e.target;
-            while (el && el.tagName !== 'A') el = el.parentElement;
-            if (el && el.target === '_blank' && el.href) {
-              e.preventDefault();
-              window.location.href = el.href;
-            }
-          }, true);
         }
+
+        // ✅ FIX 2: Date/Time Picker
+        if (typeof window._sirdabaPickerPatched === 'undefined') {
+          window._sirdabaPickerPatched = true;
+
+          var styleEl = document.createElement('style');
+          styleEl.textContent = '#sd-picker-overlay{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:999999;display:flex;align-items:flex-end;justify-content:center}#sd-picker-box{background:#fff;border-radius:16px 16px 0 0;padding:16px;width:100%;max-width:480px;font-family:sans-serif}#sd-picker-box h3{margin:0 0 12px;font-size:16px;text-align:center;color:#333}#sd-picker-selects{display:flex;gap:8px;justify-content:center;margin-bottom:16px}#sd-picker-selects select{flex:1;padding:10px 4px;border:1px solid #ddd;border-radius:8px;font-size:15px;text-align:center;background:#f9f9f9}#sd-picker-btns{display:flex;gap:8px}#sd-picker-btns button{flex:1;padding:12px;border:none;border-radius:8px;font-size:15px;cursor:pointer}#sd-btn-cancel{background:#f0f0f0;color:#555}#sd-btn-ok{background:#E8821A;color:#fff;font-weight:bold}';
+          document.head.appendChild(styleEl);
+
+          function pad(n){return String(n).padStart(2,'0');}
+
+          function showDatePicker(input){
+            var now=input.value?new Date(input.value):new Date();
+            var y=now.getFullYear(),m=now.getMonth()+1,d=now.getDate();
+            var yOpts='',mOpts='',dOpts='';
+            for(var i=2020;i<=2030;i++)yOpts+='<option value="'+i+'"'+(i===y?' selected':'')+'>'+i+'</option>';
+            var mNames=['يناير','فبراير','مارس','أبريل','ماي','يونيو','يوليوز','غشت','شتنبر','أكتوبر','نونبر','دجنبر'];
+            for(var i=1;i<=12;i++)mOpts+='<option value="'+i+'"'+(i===m?' selected':'')+'>'+pad(i)+' - '+mNames[i-1]+'</option>';
+            for(var i=1;i<=31;i++)dOpts+='<option value="'+i+'"'+(i===d?' selected':'')+'>'+pad(i)+'</option>';
+            var overlay=document.createElement('div');
+            overlay.id='sd-picker-overlay';
+            overlay.innerHTML='<div id="sd-picker-box"><h3>اختر التاريخ</h3><div id="sd-picker-selects"><select id="sd-sel-y">'+yOpts+'</select><select id="sd-sel-m">'+mOpts+'</select><select id="sd-sel-d">'+dOpts+'</select></div><div id="sd-picker-btns"><button id="sd-btn-cancel">إلغاء</button><button id="sd-btn-ok">تأكيد</button></div></div>';
+            document.body.appendChild(overlay);
+            document.getElementById('sd-btn-cancel').onclick=function(){document.body.removeChild(overlay);};
+            document.getElementById('sd-btn-ok').onclick=function(){
+              var yv=document.getElementById('sd-sel-y').value;
+              var mv=pad(document.getElementById('sd-sel-m').value);
+              var dv=pad(document.getElementById('sd-sel-d').value);
+              input.value=yv+'-'+mv+'-'+dv;
+              input.dispatchEvent(new Event('change',{bubbles:true}));
+              input.dispatchEvent(new Event('input',{bubbles:true}));
+              document.body.removeChild(overlay);
+            };
+          }
+
+          function showTimePicker(input){
+            var parts=input.value?input.value.split(':'):['12','00'];
+            var hh=parseInt(parts[0])||12,mm=parseInt(parts[1])||0;
+            var hOpts='',mOpts='';
+            for(var i=0;i<=23;i++)hOpts+='<option value="'+i+'"'+(i===hh?' selected':'')+'>'+pad(i)+'</option>';
+            for(var i=0;i<=59;i++)mOpts+='<option value="'+i+'"'+(i===mm?' selected':'')+'>'+pad(i)+'</option>';
+            var overlay=document.createElement('div');
+            overlay.id='sd-picker-overlay';
+            overlay.innerHTML='<div id="sd-picker-box"><h3>اختر الوقت</h3><div id="sd-picker-selects"><select id="sd-sel-h">'+hOpts+'</select><select id="sd-sel-m">'+mOpts+'</select></div><div id="sd-picker-btns"><button id="sd-btn-cancel">إلغاء</button><button id="sd-btn-ok">تأكيد</button></div></div>';
+            document.body.appendChild(overlay);
+            document.getElementById('sd-btn-cancel').onclick=function(){document.body.removeChild(overlay);};
+            document.getElementById('sd-btn-ok').onclick=function(){
+              var hv=pad(document.getElementById('sd-sel-h').value);
+              var mv=pad(document.getElementById('sd-sel-m').value);
+              input.value=hv+':'+mv;
+              input.dispatchEvent(new Event('change',{bubbles:true}));
+              input.dispatchEvent(new Event('input',{bubbles:true}));
+              document.body.removeChild(overlay);
+            };
+          }
+
+          function patchInputs(){
+            document.querySelectorAll('input[type=date]').forEach(function(el){
+              if(el._sdPatched)return;el._sdPatched=true;
+              el.setAttribute('readonly','true');
+              el.addEventListener('click',function(e){e.preventDefault();showDatePicker(el);});
+              el.addEventListener('focus',function(e){e.preventDefault();el.blur();showDatePicker(el);});
+            });
+            document.querySelectorAll('input[type=time]').forEach(function(el){
+              if(el._sdPatched)return;el._sdPatched=true;
+              el.setAttribute('readonly','true');
+              el.addEventListener('click',function(e){e.preventDefault();showTimePicker(el);});
+              el.addEventListener('focus',function(e){e.preventDefault();el.blur();showTimePicker(el);});
+            });
+            document.querySelectorAll('input[type=datetime-local]').forEach(function(el){
+              if(el._sdPatched)return;el._sdPatched=true;
+              el.setAttribute('readonly','true');
+              el.addEventListener('click',function(e){e.preventDefault();showDatePicker(el);});
+              el.addEventListener('focus',function(e){e.preventDefault();el.blur();showDatePicker(el);});
+            });
+          }
+
+          patchInputs();
+          new MutationObserver(function(){patchInputs();}).observe(document.body,{childList:true,subtree:true});
+        }
+
+        // ✅ FIX 3: Geolocation patch
         if (typeof window._sirdabaGeoPatched === 'undefined') {
           window._sirdabaGeoPatched = true;
           if (!navigator.geolocation || !window.isSecureContext) {
@@ -499,6 +487,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
             };
           }
         }
+
+        // ✅ FIX 4: App token
         var appToken = '';
         var cookies = document.cookie.split(';');
         for (var i = 0; i < cookies.length; i++) {
@@ -514,6 +504,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
             token: decodeURIComponent(appToken)
           }));
         }
+
       })();
     ''');
   }
