@@ -249,7 +249,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
           return NavigationDecision.navigate;
         },
       ))
-      ..loadRequest(Uri.parse('$kSiteUrl/sirdaba-client/'));
+      ..loadRequest(Uri.parse('$kSiteUrl/'));
 
     final platform = _wvc.platform;
     if (platform is AndroidWebViewController) {
