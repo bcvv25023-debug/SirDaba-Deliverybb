@@ -72,6 +72,17 @@ Future<void> _launchExternalUrl(String url) async {
   }
 }
 
+// ✅ PERMANENT FIX: يتحقق إذا الـ URL صفحة تطبيق SirDaba (مشي الصفحة الرئيسية للموقع)
+bool _isAppUrl(String url) {
+  if (url.isEmpty) return false;
+  // الصفحة الرئيسية للموقع (/) مشي صفحة تطبيق — كتسبب الـ redirect
+  if (url == kSiteUrl || url == '$kSiteUrl/' || url == '$kSiteUrl/index.php') {
+    return false;
+  }
+  // أي صفحة sirdaba-* هي صفحة تطبيق آمنة
+  return url.startsWith(kSiteUrl) && url.contains('/sirdaba-');
+}
+
 bool _isExternalUrl(String url) {
   return url.startsWith('intent://') ||
       url.startsWith('tel:') ||
@@ -88,12 +99,6 @@ bool _isExternalUrl(String url) {
       url.startsWith('fb:') ||
       url.startsWith('instagram:') ||
       url.startsWith('twitter:');
-}
-
-bool _isSiteUrl(String url) {
-  return url.startsWith(kSiteUrl) ||
-      url.startsWith('https://sirdaba.delivery') ||
-      url.startsWith('http://sirdaba.delivery');
 }
 
 class SirDabaApp extends StatelessWidget {
@@ -217,8 +222,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
   bool _tokenRegistered = false;
   final ImagePicker _imagePicker = ImagePicker();
 
-  Timer? _loadingTimeoutTimer;
-
   @override
   void initState() {
     super.initState();
@@ -226,13 +229,12 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     _initFCM();
   }
 
-  @override
-  void dispose() {
-    _loadingTimeoutTimer?.cancel();
-    super.dispose();
-  }
+  void _initWebView() async {
+    // ✅ PERMANENT FIX: نحمل آخر URL زور فيه المستخدم — مشي الصفحة الرئيسية دايماً
+    final prefs = await SharedPreferences.getInstance();
+    final lastUrl = prefs.getString('last_url') ?? '';
+    final startUrl = _isAppUrl(lastUrl) ? lastUrl : '$kSiteUrl/sirdaba-home/';
 
-  void _initWebView() {
     _wvc = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setUserAgent(
@@ -244,28 +246,19 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
           if (_firstLoad) {
             setState(() => _loading = true);
           }
-          _loadingTimeoutTimer?.cancel();
-          _loadingTimeoutTimer = Timer(const Duration(seconds: 15), () {
-            if (mounted && _loading) {
-              setState(() {
-                _loading = false;
-                _firstLoad = false;
-              });
-            }
-          });
+          // ✅ PERMANENT FIX: نحفظ الـ URL الحالي إذا كان صفحة تطبيق
+          if (_isAppUrl(url)) {
+            SharedPreferences.getInstance()
+                .then((p) => p.setString('last_url', url));
+          }
         },
         onPageFinished: _onPageFinished,
         onWebResourceError: (error) {
           debugPrint('WebView error: ${error.description}');
-          _loadingTimeoutTimer?.cancel();
-          setState(() {
-            _loading = false;
-            _firstLoad = false;
-          });
+          setState(() => _loading = false);
         },
         onNavigationRequest: (request) {
           final url = request.url;
-
           if (_isExternalUrl(url)) {
             _launchExternalUrl(url);
             return NavigationDecision.prevent;
@@ -274,29 +267,17 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
             _handleIntentUrl(url);
             return NavigationDecision.prevent;
           }
-          if (_isSiteUrl(url)) {
-            return NavigationDecision.navigate;
-          }
-          if (url.startsWith('http://') || url.startsWith('https://')) {
-            _launchExternalUrl(url);
-            return NavigationDecision.prevent;
-          }
-
           return NavigationDecision.navigate;
         },
       ))
-      ..loadRequest(Uri.parse('$kSiteUrl/'));
+      ..loadRequest(Uri.parse(startUrl));
 
     final platform = _wvc.platform;
     if (platform is AndroidWebViewController) {
-      AndroidWebViewController.enableDebugging(false);
       platform.setOnPlatformPermissionRequest((request) async {
         await Permission.camera.request();
         request.grant();
       });
-
-      // setOnCreateWindow متوفرة فقط في webview_flutter_android v4+
-      // window.open و target="_blank" يتم التعامل معهم عبر JS injection في _onPageFinished
 
       platform.setOnShowFileSelector((params) async {
         try {
@@ -415,7 +396,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
   }
 
   void _onPageFinished(String url) {
-    _loadingTimeoutTimer?.cancel();
     setState(() {
       _loading = false;
       _firstLoad = false;
@@ -521,34 +501,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
             token: decodeURIComponent(appToken)
           }));
         }
-
-        // ===== intercept target=_blank links + window.open =====
-        if (typeof window._sirdabaLinkPatched === 'undefined') {
-          window._sirdabaLinkPatched = true;
-
-          // patch target="_blank" clicks
-          document.addEventListener('click', function(e) {
-            var el = e.target;
-            while (el && el.tagName !== 'A') el = el.parentElement;
-            if (el && el.target === '_blank') {
-              var href = el.href;
-              if (href && href.startsWith('http')) {
-                e.preventDefault();
-                window.location.href = href;
-              }
-            }
-          }, true);
-
-          // patch window.open() -> redirect في نفس الـ window
-          var _origOpen = window.open;
-          window.open = function(url, target, features) {
-            if (url && typeof url === 'string' && url.startsWith('http')) {
-              window.location.href = url;
-              return null;
-            }
-            return _origOpen ? _origOpen.call(window, url, target, features) : null;
-          };
-        }
       })();
     ''');
   }
@@ -590,7 +542,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     final pickedDate = await showDatePicker(
       context: context,
       initialDate: initialDate,
-      firstDate: DateTime.now().subtract(const Duration(days: 365)),
+      firstDate: DateTime.now().subtract(const Duration(days: 0)),
       lastDate: DateTime.now().add(const Duration(days: 365)),
       builder: (context, child) {
         return Theme(
