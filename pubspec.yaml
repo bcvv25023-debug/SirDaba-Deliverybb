@@ -9,6 +9,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  flutter_localizations:
+    sdk: flutter
   webview_flutter: ^4.4.2
   webview_flutter_android: ^3.16.3
   firebase_core: ^2.24.2
@@ -23,5 +25,6 @@ dependencies:
 
 flutter:
   uses-material-design: true
+  generate: true
   assets:
     - assets/images/
