@@ -410,18 +410,16 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
           function patchDateInput(input) {
             if (input._sirdabaPatched) return;
             input._sirdabaPatched = true;
-            input.addEventListener('click', function(e) {
+
+            var _opening = false;
+
+            function openPicker(e) {
               e.preventDefault();
               e.stopPropagation();
-              window.SirDabaFlutter.postMessage(JSON.stringify({
-                type: 'open_datetime',
-                inputId: input.id || '',
-                inputName: input.name || '',
-                currentValue: input.value || ''
-              }));
-            }, true);
-            input.addEventListener('focus', function(e) {
-              e.preventDefault();
+              e.stopImmediatePropagation();
+              if (_opening) return;
+              _opening = true;
+              setTimeout(function() { _opening = false; }, 800);
               input.blur();
               window.SirDabaFlutter.postMessage(JSON.stringify({
                 type: 'open_datetime',
@@ -429,6 +427,28 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
                 inputName: input.name || '',
                 currentValue: input.value || ''
               }));
+              return false;
+            }
+
+            input.addEventListener('mousedown', function(e) {
+              e.preventDefault();
+              e.stopPropagation();
+              e.stopImmediatePropagation();
+              return false;
+            }, true);
+            input.addEventListener('touchstart', function(e) {
+              e.preventDefault();
+              e.stopPropagation();
+              e.stopImmediatePropagation();
+              return false;
+            }, true);
+            input.addEventListener('click', openPicker, true);
+            input.addEventListener('focus', function(e) {
+              e.preventDefault();
+              e.stopPropagation();
+              e.stopImmediatePropagation();
+              input.blur();
+              return false;
             }, true);
           }
 
