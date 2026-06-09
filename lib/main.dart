@@ -240,18 +240,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
 
     final platform = _wvc.platform;
     if (platform is AndroidWebViewController) {
-      platform.setOnCreateWindow((request) async {
-        final url = request.url;
-        if (url != null && url.isNotEmpty) {
-          if (_isExternalUrl(url)) {
-            await _launchExternalUrl(url);
-          } else {
-            _wvc.loadRequest(Uri.parse(url));
-          }
-        }
-        return false;
-      });
-
       platform.setOnPlatformPermissionRequest((request) async {
         await Permission.camera.request();
         request.grant();
@@ -374,7 +362,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     _wvc.runJavaScript('''
       (function() {
 
-        // ✅ FIX 1: patch window.open
+        // ✅ FIX 1: window.open + target=_blank
         if (typeof window._sirdabaOpenPatched === 'undefined') {
           window._sirdabaOpenPatched = true;
           var _origOpen = window.open;
@@ -385,18 +373,23 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
             }
             return _origOpen ? _origOpen.call(window, url, target, features) : null;
           };
+          document.addEventListener('click', function(e) {
+            var el = e.target;
+            while (el && el.tagName !== 'A') el = el.parentElement;
+            if (el && el.tagName === 'A' && el.target === '_blank' && el.href) {
+              e.preventDefault();
+              window.location.href = el.href;
+            }
+          }, true);
         }
 
         // ✅ FIX 2: Date/Time Picker
         if (typeof window._sirdabaPickerPatched === 'undefined') {
           window._sirdabaPickerPatched = true;
-
           var styleEl = document.createElement('style');
           styleEl.textContent = '#sd-picker-overlay{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:999999;display:flex;align-items:flex-end;justify-content:center}#sd-picker-box{background:#fff;border-radius:16px 16px 0 0;padding:16px;width:100%;max-width:480px;font-family:sans-serif}#sd-picker-box h3{margin:0 0 12px;font-size:16px;text-align:center;color:#333}#sd-picker-selects{display:flex;gap:8px;justify-content:center;margin-bottom:16px}#sd-picker-selects select{flex:1;padding:10px 4px;border:1px solid #ddd;border-radius:8px;font-size:15px;text-align:center;background:#f9f9f9}#sd-picker-btns{display:flex;gap:8px}#sd-picker-btns button{flex:1;padding:12px;border:none;border-radius:8px;font-size:15px;cursor:pointer}#sd-btn-cancel{background:#f0f0f0;color:#555}#sd-btn-ok{background:#E8821A;color:#fff;font-weight:bold}';
           document.head.appendChild(styleEl);
-
           function pad(n){return String(n).padStart(2,'0');}
-
           function showDatePicker(input){
             var now=input.value?new Date(input.value):new Date();
             var y=now.getFullYear(),m=now.getMonth()+1,d=now.getDate();
@@ -420,7 +413,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
               document.body.removeChild(overlay);
             };
           }
-
           function showTimePicker(input){
             var parts=input.value?input.value.split(':'):['12','00'];
             var hh=parseInt(parts[0])||12,mm=parseInt(parts[1])||0;
@@ -441,7 +433,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
               document.body.removeChild(overlay);
             };
           }
-
           function patchInputs(){
             document.querySelectorAll('input[type=date]').forEach(function(el){
               if(el._sdPatched)return;el._sdPatched=true;
@@ -462,12 +453,11 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
               el.addEventListener('focus',function(e){e.preventDefault();el.blur();showDatePicker(el);});
             });
           }
-
           patchInputs();
           new MutationObserver(function(){patchInputs();}).observe(document.body,{childList:true,subtree:true});
         }
 
-        // ✅ FIX 3: Geolocation patch
+        // ✅ FIX 3: Geolocation
         if (typeof window._sirdabaGeoPatched === 'undefined') {
           window._sirdabaGeoPatched = true;
           if (!navigator.geolocation || !window.isSecureContext) {
