@@ -369,7 +369,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
       _firstLoad = false;
     });
 
-    // امسح logout flag عند فتح الصفحة الرئيسية أو login
     if (url == '$kSiteUrl/' ||
         url == kSiteUrl ||
         url == kLoginUrl ||
@@ -380,7 +379,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
 
     _wvc.runJavaScript(r'''
 (function() {
-  // ===== Geolocation patch =====
   if (typeof window._sirdabaGeoPatched === 'undefined') {
     window._sirdabaGeoPatched = true;
     if (!navigator.geolocation || !window.isSecureContext) {
@@ -401,7 +399,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     }
   }
 
-  // ===== datetime-local patch =====
   if (typeof window._sirdabaDatePatched === 'undefined') {
     window._sirdabaDatePatched = true;
     function patchDateInput(input) {
@@ -449,7 +446,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     };
   }
 
-  // ===== App token =====
   var appToken='';
   document.cookie.split(';').forEach(function(c){
     var t=c.trim();
@@ -459,7 +455,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     window.SirDabaFlutter.postMessage(JSON.stringify({type:'app_token',token:decodeURIComponent(appToken)}));
   }
 
-  // ===== Logout detector =====
   if (typeof window._sirdabaLogoutPatched === 'undefined') {
     window._sirdabaLogoutPatched = true;
 
@@ -476,7 +471,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
       );
     }
 
-    // jQuery AJAX
     if (typeof jQuery !== 'undefined') {
       jQuery(document).ajaxComplete(function(event, xhr, settings) {
         try {
@@ -488,7 +482,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
       });
     }
 
-    // XMLHttpRequest
     var OrigSend = XMLHttpRequest.prototype.send;
     var OrigOpen = XMLHttpRequest.prototype.open;
     XMLHttpRequest.prototype.open = function(m, url) {
@@ -505,7 +498,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
       return OrigSend.apply(this, arguments);
     };
 
-    // fetch
     var origFetch = window.fetch;
     window.fetch = function(input, init) {
       var url = (typeof input==='string') ? input : (input&&input.url)||'';
@@ -556,6 +548,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     await prefs.setBool(kPrefIsLoggedOut, true);
     await prefs.remove('fcm_token_registered');
     _tokenRegistered = false;
+    // ★ امسح كل cookies الـ WebView — يمنع WordPress من إعادة login تلقائياً
+    await WebViewCookieManager().clearCookies();
     if (mounted) {
       await _wvc.loadRequest(Uri.parse(kLoginUrl));
     }
