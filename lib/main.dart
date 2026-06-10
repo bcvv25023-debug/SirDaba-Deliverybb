@@ -32,7 +32,7 @@ const AndroidNotificationChannel channel = AndroidNotificationChannel(
 );
 
 const String kSiteUrl = 'https://sirdaba.delivery';
-const String kLoginUrl = '$kSiteUrl/sirdaba-login/';
+const String kLoginUrl = '$kSiteUrl/';
 const String kClientUrl = '$kSiteUrl/sirdaba-client/';
 const String kPrefIsLoggedOut = 'sirdaba_is_logged_out';
 
@@ -115,9 +115,6 @@ class SirDabaApp extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────
-// Splash Screen
-// ─────────────────────────────────────────────
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
   @override
@@ -205,9 +202,6 @@ class _SplashScreenState extends State<SplashScreen>
   }
 }
 
-// ─────────────────────────────────────────────
-// Main WebView Screen
-// ─────────────────────────────────────────────
 class MainWebViewScreen extends StatefulWidget {
   final String initialUrl;
   const MainWebViewScreen({super.key, this.initialUrl = kClientUrl});
@@ -375,7 +369,12 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
       _firstLoad = false;
     });
 
-    if (url.contains('sirdaba-login') || url.contains('sirdaba-register')) {
+    // امسح logout flag عند فتح الصفحة الرئيسية أو login
+    if (url == '$kSiteUrl/' ||
+        url == kSiteUrl ||
+        url == kLoginUrl ||
+        url.contains('sirdaba-login') ||
+        url.contains('sirdaba-register')) {
       _clearLogoutFlag();
     }
 
