@@ -32,8 +32,11 @@ const AndroidNotificationChannel channel = AndroidNotificationChannel(
 );
 
 const String kSiteUrl = 'https://sirdaba.delivery';
+const String kHomeUrl = '$kSiteUrl/';
 const String kLoginUrl = '$kSiteUrl/';
 const String kClientUrl = '$kSiteUrl/sirdaba-client/';
+const String kDistributorUrl = '$kSiteUrl/sirdaba-distributor/';
+const String kAppStatusUrl = '$kSiteUrl/wp-json/sirdaba/v1/mobile/app-status';
 const String kPrefIsLoggedOut = 'sirdaba_is_logged_out';
 
 Future<void> main() async {
@@ -93,6 +96,54 @@ bool _isExternalUrl(String url) {
       url.startsWith('twitter:');
 }
 
+/// ★ يسأل الموقع واش المستخدم مسجل دخول وأين يوجهه
+/// يرجع URL المناسب:
+///   - مسجل دخول كعميل   → /sirdaba-client/
+///   - مسجل دخول كموزع   → /sirdaba-distributor/
+///   - غير مسجل           → / (الصفحة الرئيسية)
+Future<String> _resolveInitialUrl() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final isLoggedOut = prefs.getBool(kPrefIsLoggedOut) ?? false;
+
+    // إذا المستخدم ضغط تسجيل خروج صراحةً → الصفحة الرئيسية
+    if (isLoggedOut) {
+      return kHomeUrl;
+    }
+
+    // نسأل الموقع عبر app-status endpoint
+    final response = await http.get(
+      Uri.parse(kAppStatusUrl),
+      headers: {
+        'User-Agent':
+            'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 SirDabaApp/1.0 SirDaba-App-Android-Agent',
+      },
+    ).timeout(const Duration(seconds: 6));
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final loggedIn = data['logged_in'] == true;
+      final dashboardUrl = data['dashboard_url'] as String? ?? '';
+      final userType = data['user_type'] as String? ?? '';
+
+      if (loggedIn && dashboardUrl.isNotEmpty) {
+        // الموقع أعطانا الرابط المناسب مباشرة
+        return dashboardUrl.endsWith('/') ? dashboardUrl : '$dashboardUrl/';
+      }
+
+      if (loggedIn) {
+        // fallback حسب النوع
+        return userType == 'distributor' ? kDistributorUrl : kClientUrl;
+      }
+    }
+  } catch (e) {
+    debugPrint('app-status check failed: $e');
+  }
+
+  // في حالة خطأ في الشبكة أو غير مسجل → الصفحة الرئيسية
+  return kHomeUrl;
+}
+
 class SirDabaApp extends StatelessWidget {
   const SirDabaApp({super.key});
   @override
@@ -143,9 +194,10 @@ class _SplashScreenState extends State<SplashScreen>
       Future.delayed(const Duration(milliseconds: 1500)),
     ]).then((_) async {
       if (!mounted) return;
-      final prefs = await SharedPreferences.getInstance();
-      final isLoggedOut = prefs.getBool(kPrefIsLoggedOut) ?? false;
-      final initialUrl = isLoggedOut ? kLoginUrl : kClientUrl;
+
+      // ★ الآن نسأل الموقع أين نوجه المستخدم
+      final initialUrl = await _resolveInitialUrl();
+
       if (mounted) {
         Navigator.of(context).pushReplacement(PageRouteBuilder(
           pageBuilder: (_, __, ___) =>
@@ -204,7 +256,7 @@ class _SplashScreenState extends State<SplashScreen>
 
 class MainWebViewScreen extends StatefulWidget {
   final String initialUrl;
-  const MainWebViewScreen({super.key, this.initialUrl = kClientUrl});
+  const MainWebViewScreen({super.key, this.initialUrl = kHomeUrl});
   @override
   State<MainWebViewScreen> createState() => _MainWebViewScreenState();
 }
@@ -369,8 +421,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
       _firstLoad = false;
     });
 
-    // ★ _clearLogoutFlag() محذوف من هنا — يُمسح فقط عند استلام app_token
-
     _wvc.runJavaScript(r'''
 (function() {
   if (typeof window._sirdabaGeoPatched === 'undefined') {
@@ -520,7 +570,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
         case 'app_token':
           final appToken = data['token'] as String? ?? '';
           if (appToken.isNotEmpty) {
-            // ★ هنا فقط نمسح الـ flag — بعد تسجيل الدخول الفعلي
             await _clearLogoutFlag();
             if (_fcmToken != null && !_tokenRegistered) {
               _registerFcmTokenWithAuth(_fcmToken!, appToken);
@@ -548,7 +597,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     _tokenRegistered = false;
     await WebViewCookieManager().clearCookies();
     if (mounted) {
-      await _wvc.loadRequest(Uri.parse(kLoginUrl));
+      // ★ بعد تسجيل الخروج → الصفحة الرئيسية دائماً
+      await _wvc.loadRequest(Uri.parse(kHomeUrl));
     }
   }
 
