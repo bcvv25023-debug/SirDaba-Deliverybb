@@ -369,13 +369,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
       _firstLoad = false;
     });
 
-    if (url == '$kSiteUrl/' ||
-        url == kSiteUrl ||
-        url == kLoginUrl ||
-        url.contains('sirdaba-login') ||
-        url.contains('sirdaba-register')) {
-      _clearLogoutFlag();
-    }
+    // ★ _clearLogoutFlag() محذوف من هنا — يُمسح فقط عند استلام app_token
 
     _wvc.runJavaScript(r'''
 (function() {
@@ -525,8 +519,12 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
           break;
         case 'app_token':
           final appToken = data['token'] as String? ?? '';
-          if (appToken.isNotEmpty && _fcmToken != null && !_tokenRegistered) {
-            _registerFcmTokenWithAuth(_fcmToken!, appToken);
+          if (appToken.isNotEmpty) {
+            // ★ هنا فقط نمسح الـ flag — بعد تسجيل الدخول الفعلي
+            await _clearLogoutFlag();
+            if (_fcmToken != null && !_tokenRegistered) {
+              _registerFcmTokenWithAuth(_fcmToken!, appToken);
+            }
           }
           break;
         case 'get_location':
@@ -548,7 +546,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     await prefs.setBool(kPrefIsLoggedOut, true);
     await prefs.remove('fcm_token_registered');
     _tokenRegistered = false;
-    // ★ امسح كل cookies الـ WebView — يمنع WordPress من إعادة login تلقائياً
     await WebViewCookieManager().clearCookies();
     if (mounted) {
       await _wvc.loadRequest(Uri.parse(kLoginUrl));
