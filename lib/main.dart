@@ -33,7 +33,6 @@ const AndroidNotificationChannel channel = AndroidNotificationChannel(
 
 const String kSiteUrl = 'https://sirdaba.delivery';
 const String kHomeUrl = '$kSiteUrl/';
-const String kLoginUrl = '$kSiteUrl/';
 const String kClientUrl = '$kSiteUrl/sirdaba-client/';
 const String kDistributorUrl = '$kSiteUrl/sirdaba-distributor/';
 const String kAppStatusUrl = '$kSiteUrl/wp-json/sirdaba/v1/mobile/app-status';
@@ -96,22 +95,12 @@ bool _isExternalUrl(String url) {
       url.startsWith('twitter:');
 }
 
-/// ★ يسأل الموقع واش المستخدم مسجل دخول وأين يوجهه
-/// يرجع URL المناسب:
-///   - مسجل دخول كعميل   → /sirdaba-client/
-///   - مسجل دخول كموزع   → /sirdaba-distributor/
-///   - غير مسجل           → / (الصفحة الرئيسية)
 Future<String> _resolveInitialUrl() async {
   try {
     final prefs = await SharedPreferences.getInstance();
     final isLoggedOut = prefs.getBool(kPrefIsLoggedOut) ?? false;
+    if (isLoggedOut) return kHomeUrl;
 
-    // إذا المستخدم ضغط تسجيل خروج صراحةً → الصفحة الرئيسية
-    if (isLoggedOut) {
-      return kHomeUrl;
-    }
-
-    // نسأل الموقع عبر app-status endpoint
     final response = await http.get(
       Uri.parse(kAppStatusUrl),
       headers: {
@@ -127,20 +116,15 @@ Future<String> _resolveInitialUrl() async {
       final userType = data['user_type'] as String? ?? '';
 
       if (loggedIn && dashboardUrl.isNotEmpty) {
-        // الموقع أعطانا الرابط المناسب مباشرة
         return dashboardUrl.endsWith('/') ? dashboardUrl : '$dashboardUrl/';
       }
-
       if (loggedIn) {
-        // fallback حسب النوع
         return userType == 'distributor' ? kDistributorUrl : kClientUrl;
       }
     }
   } catch (e) {
     debugPrint('app-status check failed: $e');
   }
-
-  // في حالة خطأ في الشبكة أو غير مسجل → الصفحة الرئيسية
   return kHomeUrl;
 }
 
@@ -194,10 +178,7 @@ class _SplashScreenState extends State<SplashScreen>
       Future.delayed(const Duration(milliseconds: 1500)),
     ]).then((_) async {
       if (!mounted) return;
-
-      // ★ الآن نسأل الموقع أين نوجه المستخدم
       final initialUrl = await _resolveInitialUrl();
-
       if (mounted) {
         Navigator.of(context).pushReplacement(PageRouteBuilder(
           pageBuilder: (_, __, ___) =>
@@ -279,6 +260,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
   void _initWebView() {
     _wvc = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setBackgroundColor(Colors.white)
       ..setUserAgent(
           'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 SirDabaApp/1.0 SirDaba-App-Android-Agent')
       ..addJavaScriptChannel('SirDabaFlutter',
@@ -309,6 +291,13 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
 
     final platform = _wvc.platform;
     if (platform is AndroidWebViewController) {
+      AndroidWebViewController.enableDebugging(false);
+      platform.setMediaPlaybackRequiresUserGesture(false);
+      // ✅ FIX MAP: يسمح لـ OpenStreetMap tiles بالتحميل داخل WebView
+      platform.setMixedContentMode(MixedContentMode.compatibilityMode);
+      // ✅ FIX MAP: يمنع WebView من تغيير zoom النص ويضمن layout صحيح للخريطة
+      platform.setTextZoom(100);
+
       platform.setOnPlatformPermissionRequest((request) async {
         await Permission.camera.request();
         request.grant();
@@ -421,6 +410,34 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
       _firstLoad = false;
     });
 
+    // ✅ FIX MAP: invalidateSize من Flutter بعد تحميل صفحة التتبع
+    final isTrackingPage = url.contains('sirdaba-tracking');
+    if (isTrackingPage) {
+      Future.delayed(const Duration(milliseconds: 800), () {
+        _wvc.runJavaScript('''
+(function() {
+  var s = window._sdTrackingMapState;
+  if (s && s.map) {
+    try { s.map.invalidateSize(true); } catch(e) {}
+  }
+  if (typeof window.sdBootTrackingWidgets === 'function') {
+    if (!s || !s.map) {
+      window.sdBootTrackingWidgets();
+    }
+  }
+})();
+''');
+      });
+      Future.delayed(const Duration(milliseconds: 1500), () {
+        _wvc.runJavaScript('''
+(function() {
+  var s = window._sdTrackingMapState;
+  if (s && s.map) { try { s.map.invalidateSize(true); } catch(e) {} }
+})();
+''');
+      });
+    }
+
     _wvc.runJavaScript(r'''
 (function() {
   if (typeof window._sirdabaGeoPatched === 'undefined') {
@@ -501,11 +518,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
 
   if (typeof window._sirdabaLogoutPatched === 'undefined') {
     window._sirdabaLogoutPatched = true;
-
     function notifyLogout() {
       window.SirDabaFlutter.postMessage(JSON.stringify({type:'user_logged_out'}));
     }
-
     function isLogoutAction(str) {
       return str && (
         str.indexOf('sirdaba_client_logout') !== -1 ||
@@ -514,7 +529,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
         str.indexOf('dist/logout') !== -1
       );
     }
-
     if (typeof jQuery !== 'undefined') {
       jQuery(document).ajaxComplete(function(event, xhr, settings) {
         try {
@@ -525,7 +539,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
         } catch(e) {}
       });
     }
-
     var OrigSend = XMLHttpRequest.prototype.send;
     var OrigOpen = XMLHttpRequest.prototype.open;
     XMLHttpRequest.prototype.open = function(m, url) {
@@ -541,7 +554,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
       }
       return OrigSend.apply(this, arguments);
     };
-
     var origFetch = window.fetch;
     window.fetch = function(input, init) {
       var url = (typeof input==='string') ? input : (input&&input.url)||'';
@@ -597,7 +609,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     _tokenRegistered = false;
     await WebViewCookieManager().clearCookies();
     if (mounted) {
-      // ★ بعد تسجيل الخروج → الصفحة الرئيسية دائماً
       await _wvc.loadRequest(Uri.parse(kHomeUrl));
     }
   }
