@@ -32,12 +32,6 @@ const AndroidNotificationChannel channel = AndroidNotificationChannel(
 );
 
 const String kSiteUrl = 'https://sirdaba.delivery';
-const String kHomeUrl = '$kSiteUrl/';
-const String kLoginUrl = '$kSiteUrl/';
-const String kClientUrl = '$kSiteUrl/sirdaba-client/';
-const String kDistributorUrl = '$kSiteUrl/sirdaba-distributor/';
-const String kAppStatusUrl = '$kSiteUrl/wp-json/sirdaba/v1/mobile/app-status';
-const String kPrefIsLoggedOut = 'sirdaba_is_logged_out';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -96,36 +90,6 @@ bool _isExternalUrl(String url) {
       url.startsWith('twitter:');
 }
 
-Future<String> _resolveInitialUrl() async {
-  try {
-    final prefs = await SharedPreferences.getInstance();
-    final isLoggedOut = prefs.getBool(kPrefIsLoggedOut) ?? false;
-    if (isLoggedOut) return kHomeUrl;
-    final response = await http.get(
-      Uri.parse(kAppStatusUrl),
-      headers: {
-        'User-Agent':
-            'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 SirDabaApp/1.0 SirDaba-App-Android-Agent',
-      },
-    ).timeout(const Duration(seconds: 6));
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body) as Map<String, dynamic>;
-      final loggedIn = data['logged_in'] == true;
-      final dashboardUrl = data['dashboard_url'] as String? ?? '';
-      final userType = data['user_type'] as String? ?? '';
-      if (loggedIn && dashboardUrl.isNotEmpty) {
-        return dashboardUrl.endsWith('/') ? dashboardUrl : '$dashboardUrl/';
-      }
-      if (loggedIn) {
-        return userType == 'distributor' ? kDistributorUrl : kClientUrl;
-      }
-    }
-  } catch (e) {
-    debugPrint('app-status check failed: $e');
-  }
-  return kHomeUrl;
-}
-
 class SirDabaApp extends StatelessWidget {
   const SirDabaApp({super.key});
   @override
@@ -138,7 +102,10 @@ class SirDabaApp extends StatelessWidget {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      supportedLocales: const [Locale('ar'), Locale('en')],
+      supportedLocales: const [
+        Locale('ar'),
+        Locale('en'),
+      ],
       locale: const Locale('ar'),
       theme: ThemeData(
           colorScheme:
@@ -164,22 +131,20 @@ class _SplashScreenState extends State<SplashScreen>
     super.initState();
     _ctrl = AnimationController(
         duration: const Duration(milliseconds: 900), vsync: this);
-    _scale = Tween<double>(begin: 0.7, end: 1.0)
-        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutBack));
+    _scale = Tween<double>(begin: 0.7, end: 1.0).animate(
+        CurvedAnimation(parent: _ctrl, curve: Curves.easeOutBack));
     _fade = Tween<double>(begin: 0.0, end: 1.0).animate(CurvedAnimation(
         parent: _ctrl,
         curve: const Interval(0.0, 0.5, curve: Curves.easeIn)));
     _ctrl.forward();
+
     Future.wait([
       _requestAllPermissions(),
       Future.delayed(const Duration(milliseconds: 1500)),
-    ]).then((_) async {
-      if (!mounted) return;
-      final initialUrl = await _resolveInitialUrl();
+    ]).then((_) {
       if (mounted) {
         Navigator.of(context).pushReplacement(PageRouteBuilder(
-          pageBuilder: (_, __, ___) =>
-              MainWebViewScreen(initialUrl: initialUrl),
+          pageBuilder: (_, __, ___) => const MainWebViewScreen(),
           transitionsBuilder: (_, a, __, c) =>
               FadeTransition(opacity: a, child: c),
           transitionDuration: const Duration(milliseconds: 400),
@@ -233,8 +198,7 @@ class _SplashScreenState extends State<SplashScreen>
 }
 
 class MainWebViewScreen extends StatefulWidget {
-  final String initialUrl;
-  const MainWebViewScreen({super.key, this.initialUrl = kHomeUrl});
+  const MainWebViewScreen({super.key});
   @override
   State<MainWebViewScreen> createState() => _MainWebViewScreenState();
 }
@@ -257,14 +221,15 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
   void _initWebView() {
     _wvc = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(Colors.white)
       ..setUserAgent(
           'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 SirDabaApp/1.0 SirDaba-App-Android-Agent')
       ..addJavaScriptChannel('SirDabaFlutter',
           onMessageReceived: _onJsMessage)
       ..setNavigationDelegate(NavigationDelegate(
         onPageStarted: (url) {
-          if (_firstLoad) setState(() => _loading = true);
+          if (_firstLoad) {
+            setState(() => _loading = true);
+          }
         },
         onPageFinished: _onPageFinished,
         onWebResourceError: (error) {
@@ -284,13 +249,11 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
           return NavigationDecision.navigate;
         },
       ))
-      ..loadRequest(Uri.parse(widget.initialUrl));
+      ..loadRequest(Uri.parse('$kSiteUrl/sirdaba-client/'));
 
     final platform = _wvc.platform;
     if (platform is AndroidWebViewController) {
       AndroidWebViewController.enableDebugging(true);
-      platform.setMediaPlaybackRequiresUserGesture(false);
-
       platform.setOnPlatformPermissionRequest((request) async {
         await Permission.camera.request();
         request.grant();
@@ -300,19 +263,29 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
         try {
           await Permission.photos.request();
           await Permission.storage.request();
+
           final source = await _showImageSourceDialog();
           if (source == null) return const <String>[];
+
           XFile? pickedFile;
+
           if (source == ImageSource.camera) {
             await Permission.camera.request();
             pickedFile = await _imagePicker.pickImage(
-                source: ImageSource.camera, imageQuality: 85);
+              source: ImageSource.camera,
+              imageQuality: 85,
+            );
           } else {
             pickedFile = await _imagePicker.pickImage(
-                source: ImageSource.gallery, imageQuality: 85);
+              source: ImageSource.gallery,
+              imageQuality: 85,
+            );
           }
+
           if (pickedFile == null) return const <String>[];
-          return <String>[Uri.file(pickedFile.path).toString()];
+
+          final uri = Uri.file(pickedFile.path).toString();
+          return <String>[uri];
         } catch (e) {
           debugPrint('File selector error: $e');
           return const <String>[];
@@ -329,7 +302,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
           final granted = perm == LocationPermission.always ||
               perm == LocationPermission.whileInUse;
           return GeolocationPermissionsResponse(
-              allow: granted, retain: granted);
+            allow: granted,
+            retain: granted,
+          );
         },
         onHidePrompt: () {},
       );
@@ -341,7 +316,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
       context: context,
       backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
       builder: (ctx) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -351,12 +327,15 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
               width: 40,
               height: 4,
               decoration: BoxDecoration(
-                  color: Colors.grey[300],
-                  borderRadius: BorderRadius.circular(2)),
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
             const SizedBox(height: 16),
-            const Text('اختر مصدر الصورة',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            const Text(
+              'اختر مصدر الصورة',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
             const SizedBox(height: 12),
             ListTile(
               leading: const Icon(Icons.camera_alt, color: Color(0xFFE8821A)),
@@ -364,8 +343,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
               onTap: () => Navigator.pop(ctx, ImageSource.camera),
             ),
             ListTile(
-              leading:
-                  const Icon(Icons.photo_library, color: Color(0xFFE8821A)),
+              leading: const Icon(Icons.photo_library, color: Color(0xFFE8821A)),
               title: const Text('اختيار من المعرض'),
               onTap: () => Navigator.pop(ctx, ImageSource.gallery),
             ),
@@ -404,224 +382,149 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     });
 
     _wvc.runJavaScript(r'''
-(function() {
-  function fixLeaflet() {
-    if (typeof L !== 'undefined') {
-      try {
-        L.Browser.touch = true;
-        L.Browser.pointer = false;
-        L.Browser.mobile = true;
-        L.Browser.mobileWebkit = true;
-        L.Browser.mobileWebkit3d = true;
-      } catch(e) {}
-    }
-    document.querySelectorAll('.leaflet-container').forEach(function(el) {
-      el.style.touchAction = 'none';
-      el.style.userSelect = 'none';
-      el.style.webkitUserSelect = 'none';
-      el.style.cursor = 'grab';
-    });
-  }
-  fixLeaflet();
-  setTimeout(fixLeaflet, 500);
-  setTimeout(fixLeaflet, 1500);
-  setTimeout(fixLeaflet, 3000);
-  var leafletObserver = new MutationObserver(function(mutations) {
-    mutations.forEach(function(m) {
-      m.addedNodes.forEach(function(node) {
-        if (node.nodeType === 1) {
-          if ((node.classList && node.classList.contains('leaflet-container')) ||
-              (node.querySelector && node.querySelector('.leaflet-container'))) {
-            setTimeout(fixLeaflet, 100);
+      (function() {
+        // ===== Geolocation patch =====
+        if (typeof window._sirdabaGeoPatched === 'undefined') {
+          window._sirdabaGeoPatched = true;
+          if (!navigator.geolocation || !window.isSecureContext) {
+            navigator.geolocation = {
+              getCurrentPosition: function(success, error, options) {
+                window._geoSuccessCallback = success;
+                window._geoErrorCallback = error;
+                window.SirDabaFlutter.postMessage(JSON.stringify({type: 'get_location'}));
+              },
+              watchPosition: function(success, error, options) {
+                window._geoSuccessCallback = success;
+                window._geoErrorCallback = error;
+                window.SirDabaFlutter.postMessage(JSON.stringify({type: 'get_location'}));
+                return 0;
+              },
+              clearWatch: function() {}
+            };
           }
         }
-      });
-    });
-  });
-  if (document.body) {
-    leafletObserver.observe(document.body, { childList: true, subtree: true });
-  }
-})();
-''');
 
-    _wvc.runJavaScript(r'''
-(function() {
-  if (typeof window._sirdabaGeoPatched === 'undefined') {
-    window._sirdabaGeoPatched = true;
-    if (!navigator.geolocation || !window.isSecureContext) {
-      navigator.geolocation = {
-        getCurrentPosition: function(success, error, options) {
-          window._geoSuccessCallback = success;
-          window._geoErrorCallback = error;
-          window.SirDabaFlutter.postMessage(JSON.stringify({type:'get_location'}));
-        },
-        watchPosition: function(success, error, options) {
-          window._geoSuccessCallback = success;
-          window._geoErrorCallback = error;
-          window.SirDabaFlutter.postMessage(JSON.stringify({type:'get_location'}));
-          return 0;
-        },
-        clearWatch: function() {}
-      };
-    }
-  }
+        // ===== datetime-local patch =====
+        if (typeof window._sirdabaDatePatched === 'undefined') {
+          window._sirdabaDatePatched = true;
 
-  if (typeof window._sirdabaDatePatched === 'undefined') {
-    window._sirdabaDatePatched = true;
-    function patchDateInput(input) {
-      if (input._sirdabaPatched) return;
-      input._sirdabaPatched = true;
-      var _opening = false;
-      function openPicker(e) {
-        e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
-        if (_opening) return;
-        _opening = true;
-        setTimeout(function() { _opening = false; }, 800);
-        input.blur();
-        window.SirDabaFlutter.postMessage(JSON.stringify({
-          type:'open_datetime', inputId:input.id||'', inputName:input.name||'', currentValue:input.value||''
-        }));
-      }
-      input.addEventListener('mousedown',function(e){e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();return false;},true);
-      input.addEventListener('touchstart',function(e){e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();return false;},true);
-      input.addEventListener('click',openPicker,true);
-      input.addEventListener('focus',function(e){e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();input.blur();return false;},true);
-    }
-    document.querySelectorAll('input[type="datetime-local"]').forEach(patchDateInput);
-    var observer = new MutationObserver(function(mutations) {
-      mutations.forEach(function(m) {
-        m.addedNodes.forEach(function(node) {
-          if (node.nodeType===1) {
-            if (node.matches&&node.matches('input[type="datetime-local"]')) patchDateInput(node);
-            if (node.querySelectorAll) node.querySelectorAll('input[type="datetime-local"]').forEach(patchDateInput);
+          function patchDateInput(input) {
+            if (input._sirdabaPatched) return;
+            input._sirdabaPatched = true;
+
+            var _opening = false;
+
+            function openPicker(e) {
+              e.preventDefault();
+              e.stopPropagation();
+              e.stopImmediatePropagation();
+              if (_opening) return;
+              _opening = true;
+              setTimeout(function() { _opening = false; }, 800);
+              input.blur();
+              window.SirDabaFlutter.postMessage(JSON.stringify({
+                type: 'open_datetime',
+                inputId: input.id || '',
+                inputName: input.name || '',
+                currentValue: input.value || ''
+              }));
+              return false;
+            }
+
+            input.addEventListener('mousedown', function(e) {
+              e.preventDefault();
+              e.stopPropagation();
+              e.stopImmediatePropagation();
+              return false;
+            }, true);
+            input.addEventListener('touchstart', function(e) {
+              e.preventDefault();
+              e.stopPropagation();
+              e.stopImmediatePropagation();
+              return false;
+            }, true);
+            input.addEventListener('click', openPicker, true);
+            input.addEventListener('focus', function(e) {
+              e.preventDefault();
+              e.stopPropagation();
+              e.stopImmediatePropagation();
+              input.blur();
+              return false;
+            }, true);
           }
-        });
-      });
-    });
-    observer.observe(document.body,{childList:true,subtree:true});
-    window._sirdabaSetDatetime = function(inputId,inputName,value) {
-      var input=null;
-      if (inputId) input=document.getElementById(inputId);
-      if (!input&&inputName) input=document.querySelector('input[name="'+inputName+'"]');
-      if (!input) input=document.querySelector('input[type="datetime-local"]');
-      if (input) {
-        var setter=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
-        setter.call(input,value);
-        input.dispatchEvent(new Event('input',{bubbles:true}));
-        input.dispatchEvent(new Event('change',{bubbles:true}));
-      }
-    };
-  }
 
-  var appToken='';
-  document.cookie.split(';').forEach(function(c){
-    var t=c.trim();
-    if (t.startsWith('sirdaba_app_token=')) appToken=t.substring('sirdaba_app_token='.length);
-  });
-  if (appToken) {
-    window.SirDabaFlutter.postMessage(JSON.stringify({type:'app_token',token:decodeURIComponent(appToken)}));
-  }
+          document.querySelectorAll('input[type="datetime-local"]').forEach(patchDateInput);
 
-  if (typeof window._sirdabaLogoutPatched === 'undefined') {
-    window._sirdabaLogoutPatched = true;
-    function notifyLogout() {
-      window.SirDabaFlutter.postMessage(JSON.stringify({type:'user_logged_out'}));
-    }
-    function isLogoutAction(str) {
-      return str && (
-        str.indexOf('sirdaba_client_logout') !== -1 ||
-        str.indexOf('sirdaba_dist_logout') !== -1 ||
-        str.indexOf('sirdaba_admin_logout') !== -1 ||
-        str.indexOf('dist/logout') !== -1
-      );
-    }
-    if (typeof jQuery !== 'undefined') {
-      jQuery(document).ajaxComplete(function(event, xhr, settings) {
-        try {
-          if (isLogoutAction(settings.data||'') || isLogoutAction(settings.url||'')) {
-            var d = JSON.parse(xhr.responseText);
-            if (d && d.success) notifyLogout();
+          var observer = new MutationObserver(function(mutations) {
+            mutations.forEach(function(m) {
+              m.addedNodes.forEach(function(node) {
+                if (node.nodeType === 1) {
+                  if (node.matches && node.matches('input[type="datetime-local"]')) {
+                    patchDateInput(node);
+                  }
+                  if (node.querySelectorAll) {
+                    node.querySelectorAll('input[type="datetime-local"]').forEach(patchDateInput);
+                  }
+                }
+              });
+            });
+          });
+          observer.observe(document.body, { childList: true, subtree: true });
+
+          window._sirdabaSetDatetime = function(inputId, inputName, value) {
+            var input = null;
+            if (inputId) input = document.getElementById(inputId);
+            if (!input && inputName) input = document.querySelector('input[name="' + inputName + '"]');
+            if (!input) input = document.querySelector('input[type="datetime-local"]');
+            if (input) {
+              var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+              nativeInputValueSetter.call(input, value);
+              input.dispatchEvent(new Event('input', { bubbles: true }));
+              input.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+          };
+        }
+
+        // ===== App token =====
+        var appToken = '';
+        var cookies = document.cookie.split(';');
+        for (var i = 0; i < cookies.length; i++) {
+          var c = cookies[i].trim();
+          if (c.startsWith('sirdaba_app_token=')) {
+            appToken = c.substring('sirdaba_app_token='.length);
+            break;
           }
-        } catch(e) {}
-      });
-    }
-    var OrigSend = XMLHttpRequest.prototype.send;
-    var OrigOpen = XMLHttpRequest.prototype.open;
-    XMLHttpRequest.prototype.open = function(m, url) {
-      this._sdUrl = url||'';
-      return OrigOpen.apply(this, arguments);
-    };
-    XMLHttpRequest.prototype.send = function(body) {
-      var bodyStr = (body||'').toString();
-      if (isLogoutAction(bodyStr) || isLogoutAction(this._sdUrl)) {
-        this.addEventListener('load', function() {
-          try { var d=JSON.parse(this.responseText); if(d&&d.success) notifyLogout(); } catch(e) {}
-        });
-      }
-      return OrigSend.apply(this, arguments);
-    };
-    var origFetch = window.fetch;
-    window.fetch = function(input, init) {
-      var url = (typeof input==='string') ? input : (input&&input.url)||'';
-      var body = (init&&init.body) ? init.body.toString() : '';
-      if (isLogoutAction(url) || isLogoutAction(body)) {
-        return origFetch.apply(this, arguments).then(function(resp) {
-          resp.clone().json().then(function(d){ if(d&&d.success) notifyLogout(); }).catch(function(){});
-          return resp;
-        });
-      }
-      return origFetch.apply(this, arguments);
-    };
-  }
-})();
-''');
+        }
+        if (appToken) {
+          window.SirDabaFlutter.postMessage(JSON.stringify({
+            type: 'app_token',
+            token: decodeURIComponent(appToken)
+          }));
+        }
+      })();
+    ''');
   }
 
   void _onJsMessage(JavaScriptMessage msg) async {
     try {
       final data = jsonDecode(msg.message) as Map<String, dynamic>;
       final type = data['type'] as String? ?? '';
-      switch (type) {
-        case 'user_logged_out':
-          await _handleLogout();
-          break;
-        case 'app_token':
-          final appToken = data['token'] as String? ?? '';
-          if (appToken.isNotEmpty) {
-            await _clearLogoutFlag();
-            if (_fcmToken != null && !_tokenRegistered) {
-              _registerFcmTokenWithAuth(_fcmToken!, appToken);
-            }
-          }
-          break;
-        case 'get_location':
-          await _provideLocationToWebView();
-          break;
-        case 'open_datetime':
-          await _openDateTimePicker(
-            inputId: data['inputId'] as String? ?? '',
-            inputName: data['inputName'] as String? ?? '',
-            currentValue: data['currentValue'] as String? ?? '',
-          );
-          break;
+
+      if (type == 'app_token') {
+        final appToken = data['token'] as String? ?? '';
+        if (appToken.isNotEmpty && _fcmToken != null && !_tokenRegistered) {
+          _registerFcmTokenWithAuth(_fcmToken!, appToken);
+        }
+      } else if (type == 'get_location') {
+        await _provideLocationToWebView();
+      } else if (type == 'open_datetime') {
+        await _openDateTimePicker(
+          inputId: data['inputId'] as String? ?? '',
+          inputName: data['inputName'] as String? ?? '',
+          currentValue: data['currentValue'] as String? ?? '',
+        );
       }
     } catch (_) {}
-  }
-
-  Future<void> _handleLogout() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(kPrefIsLoggedOut, true);
-    await prefs.remove('fcm_token_registered');
-    _tokenRegistered = false;
-    await WebViewCookieManager().clearCookies();
-    if (mounted) {
-      await _wvc.loadRequest(Uri.parse(kHomeUrl));
-    }
-  }
-
-  Future<void> _clearLogoutFlag() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(kPrefIsLoggedOut, false);
   }
 
   Future<void> _openDateTimePicker({
@@ -631,51 +534,72 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
   }) async {
     DateTime initialDate = DateTime.now();
     try {
-      if (currentValue.isNotEmpty) initialDate = DateTime.parse(currentValue);
+      if (currentValue.isNotEmpty) {
+        initialDate = DateTime.parse(currentValue);
+      }
     } catch (_) {}
+
     final pickedDate = await showDatePicker(
       context: context,
       initialDate: initialDate,
-      firstDate: DateTime.now(),
+      firstDate: DateTime.now().subtract(const Duration(days: 0)),
       lastDate: DateTime.now().add(const Duration(days: 365)),
-      builder: (context, child) => Theme(
-        data: Theme.of(context).copyWith(
-          colorScheme: const ColorScheme.light(
-            primary: Color(0xFFE8821A),
-            onPrimary: Colors.white,
-            onSurface: Colors.black87,
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: Color(0xFFE8821A),
+              onPrimary: Colors.white,
+              onSurface: Colors.black87,
+            ),
           ),
-        ),
-        child: child!,
-      ),
+          child: child!,
+        );
+      },
     );
+
     if (pickedDate == null || !mounted) return;
+
     final pickedTime = await showTimePicker(
       context: context,
       initialTime: TimeOfDay.fromDateTime(initialDate),
-      builder: (context, child) => Theme(
-        data: Theme.of(context).copyWith(
-          colorScheme: const ColorScheme.light(
-            primary: Color(0xFFE8821A),
-            onPrimary: Colors.white,
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: Color(0xFFE8821A),
+              onPrimary: Colors.white,
+            ),
           ),
-        ),
-        child: Directionality(textDirection: TextDirection.rtl, child: child!),
-      ),
+          child: Directionality(
+            textDirection: TextDirection.rtl,
+            child: child!,
+          ),
+        );
+      },
     );
+
     if (pickedTime == null || !mounted) return;
-    final combined = DateTime(pickedDate.year, pickedDate.month, pickedDate.day,
-        pickedTime.hour, pickedTime.minute);
+
+    final combined = DateTime(
+      pickedDate.year,
+      pickedDate.month,
+      pickedDate.day,
+      pickedTime.hour,
+      pickedTime.minute,
+    );
+
     final formatted =
         '${combined.year.toString().padLeft(4, '0')}-'
         '${combined.month.toString().padLeft(2, '0')}-'
         '${combined.day.toString().padLeft(2, '0')}T'
         '${combined.hour.toString().padLeft(2, '0')}:'
         '${combined.minute.toString().padLeft(2, '0')}';
+
     final escapedId = inputId.replaceAll("'", "\\'");
     final escapedName = inputName.replaceAll("'", "\\'");
     await _wvc.runJavaScript(
-        "window._sirdabaSetDatetime('$escapedId','$escapedName','$formatted');");
+        "window._sirdabaSetDatetime('$escapedId', '$escapedName', '$formatted');");
   }
 
   Future<void> _provideLocationToWebView() async {
@@ -692,27 +616,48 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
           timeLimit: const Duration(seconds: 15),
         );
         await _wvc.runJavaScript('''
-(function(){
-  if(typeof window._geoSuccessCallback==='function'){
-    window._geoSuccessCallback({coords:{latitude:${pos.latitude},longitude:${pos.longitude},accuracy:${pos.accuracy},altitude:${pos.altitude},altitudeAccuracy:null,heading:null,speed:null},timestamp:${pos.timestamp.millisecondsSinceEpoch}});
-  }
-})();
-''');
+          (function() {
+            if (typeof window._geoSuccessCallback === 'function') {
+              window._geoSuccessCallback({
+                coords: {
+                  latitude: ${pos.latitude},
+                  longitude: ${pos.longitude},
+                  accuracy: ${pos.accuracy},
+                  altitude: ${pos.altitude},
+                  altitudeAccuracy: null,
+                  heading: null,
+                  speed: null
+                },
+                timestamp: ${pos.timestamp.millisecondsSinceEpoch}
+              });
+            }
+          })();
+        ''');
       } else {
-        await _wvc.runJavaScript(
-            "if(typeof window._geoErrorCallback==='function') window._geoErrorCallback({code:1,message:'Permission denied'});");
+        await _wvc.runJavaScript('''
+          if (typeof window._geoErrorCallback === 'function') {
+            window._geoErrorCallback({code: 1, message: 'Permission denied'});
+          }
+        ''');
       }
     } catch (e) {
       debugPrint('Location error: $e');
-      await _wvc.runJavaScript(
-          "if(typeof window._geoErrorCallback==='function') window._geoErrorCallback({code:2,message:'Position unavailable'});");
+      await _wvc.runJavaScript('''
+        if (typeof window._geoErrorCallback === 'function') {
+          window._geoErrorCallback({code: 2, message: 'Position unavailable'});
+        }
+      ''');
     }
   }
 
   Future<void> _initFCM() async {
     final m = FirebaseMessaging.instance;
     await m.requestPermission(
-        alert: true, badge: true, sound: true, provisional: false);
+      alert: true,
+      badge: true,
+      sound: true,
+      provisional: false,
+    );
     await flutterLocalNotificationsPlugin
         .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>()
@@ -724,10 +669,13 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
       final n = msg.notification;
       if (n != null) {
         flutterLocalNotificationsPlugin.show(
-          n.hashCode, n.title, n.body,
+          n.hashCode,
+          n.title,
+          n.body,
           NotificationDetails(
             android: AndroidNotificationDetails(
-              channel.id, channel.name,
+              channel.id,
+              channel.name,
               channelDescription: channel.description,
               importance: Importance.max,
               priority: Priority.high,
@@ -767,12 +715,17 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
       final response = await http.post(
         Uri.parse('$kSiteUrl/wp-json/sirdaba/v1/mobile/register-fcm-token'),
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: {'fcm_token': fcmToken, 'platform': 'android'},
+        body: {
+          'fcm_token': fcmToken,
+          'platform': 'android',
+        },
       );
       if (response.statusCode == 200) {
         _tokenRegistered = true;
         await prefs.setString('fcm_token_registered', fcmToken);
         debugPrint('FCM token registered ✅');
+      } else {
+        debugPrint('FCM register failed: ${response.statusCode}');
       }
     } catch (e) {
       debugPrint('FCM register error: $e');
