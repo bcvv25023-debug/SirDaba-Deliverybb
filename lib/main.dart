@@ -208,6 +208,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
   bool _loading = true;
   bool _firstLoad = true;
   String? _fcmToken;
+  String _appToken = '';
   bool _tokenRegistered = false;
   final ImagePicker _imagePicker = ImagePicker();
 
@@ -253,7 +254,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
 
     final platform = _wvc.platform;
     if (platform is AndroidWebViewController) {
-      AndroidWebViewController.enableDebugging(true);
+      // ★ تفعيل third-party cookies لضمان إرسال session cookies مع AJAX
+      platform.setThirdPartyCookiesEnabled(true);
+
       platform.setOnPlatformPermissionRequest((request) async {
         await Permission.camera.request();
         request.grant();
@@ -485,22 +488,50 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
           };
         }
 
-        // ===== App token =====
-        var appToken = '';
-        var cookies = document.cookie.split(';');
-        for (var i = 0; i < cookies.length; i++) {
-          var c = cookies[i].trim();
-          if (c.startsWith('sirdaba_app_token=')) {
-            appToken = c.substring('sirdaba_app_token='.length);
-            break;
+        // ===== App token + jQuery AJAX intercept =====
+        (function injectAppToken() {
+          var appToken = '';
+          var cookies = document.cookie.split(';');
+          for (var i = 0; i < cookies.length; i++) {
+            var c = cookies[i].trim();
+            if (c.startsWith('sirdaba_app_token=')) {
+              appToken = c.substring('sirdaba_app_token='.length);
+              break;
+            }
           }
-        }
-        if (appToken) {
-          window.SirDabaFlutter.postMessage(JSON.stringify({
-            type: 'app_token',
-            token: decodeURIComponent(appToken)
-          }));
-        }
+
+          if (appToken) {
+            window.SirDabaFlutter.postMessage(JSON.stringify({
+              type: 'app_token',
+              token: decodeURIComponent(appToken)
+            }));
+          }
+
+          if (typeof window.sirdaba_ajax !== 'undefined' && appToken) {
+            window.sirdaba_ajax.app_token = decodeURIComponent(appToken);
+          }
+
+          if (typeof window.$ !== 'undefined' && typeof window.$.ajaxPrefilter === 'function') {
+            if (!window._sirdabaAjaxPatched) {
+              window._sirdabaAjaxPatched = true;
+              var resolvedToken = appToken ? decodeURIComponent(appToken) : '';
+              window.$.ajaxPrefilter(function(options, originalOptions, jqXHR) {
+                if (options.url && options.url.indexOf('admin-ajax.php') !== -1) {
+                  var token = resolvedToken ||
+                    (window.sirdaba_ajax && window.sirdaba_ajax.app_token ? window.sirdaba_ajax.app_token : '');
+                  if (token) {
+                    if (typeof options.data === 'string') {
+                      options.data += '&sd_app_token=' + encodeURIComponent(token);
+                    } else if (options.data && typeof options.data === 'object') {
+                      options.data.sd_app_token = token;
+                    }
+                  }
+                }
+              });
+            }
+          }
+        })();
+
       })();
     ''');
   }
@@ -512,8 +543,11 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
 
       if (type == 'app_token') {
         final appToken = data['token'] as String? ?? '';
-        if (appToken.isNotEmpty && _fcmToken != null && !_tokenRegistered) {
-          _registerFcmTokenWithAuth(_fcmToken!, appToken);
+        if (appToken.isNotEmpty) {
+          _appToken = appToken;
+          if (_fcmToken != null && !_tokenRegistered) {
+            _sendFcmTokenToServer(_fcmToken!);
+          }
         }
       } else if (type == 'get_location') {
         await _provideLocationToWebView();
@@ -702,19 +736,22 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     } catch (_) {}
   }
 
-  Future<void> _registerFcmTokenWithAuth(
-      String fcmToken, String appToken) async {
-    await _sendFcmTokenToServer(fcmToken);
-  }
-
   Future<void> _sendFcmTokenToServer(String fcmToken) async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final lastRegistered = prefs.getString('fcm_token_registered') ?? '';
       if (lastRegistered == fcmToken) return;
+
+      final headers = <String, String>{
+        'Content-Type': 'application/x-www-form-urlencoded',
+      };
+      if (_appToken.isNotEmpty) {
+        headers['Authorization'] = 'Bearer $_appToken';
+      }
+
       final response = await http.post(
         Uri.parse('$kSiteUrl/wp-json/sirdaba/v1/mobile/register-fcm-token'),
-        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        headers: headers,
         body: {
           'fcm_token': fcmToken,
           'platform': 'android',
@@ -737,18 +774,16 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     if (url != null) _wvc.loadRequest(Uri.parse(url));
   }
 
-  Future<bool> _onBack() async {
-    if (await _wvc.canGoBack()) {
-      _wvc.goBack();
-      return false;
-    }
-    return true;
-  }
-
   @override
   Widget build(BuildContext context) {
-    return WillPopScope(
-      onWillPop: _onBack,
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        if (await _wvc.canGoBack()) {
+          _wvc.goBack();
+        }
+      },
       child: Scaffold(
         backgroundColor: Colors.white,
         body: SafeArea(
