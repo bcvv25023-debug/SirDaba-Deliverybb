@@ -254,8 +254,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     _initFCM();
   }
 
-  // ★ async
-  Future<void> _initWebView() async {
+  void _initWebView() {
     _wvc = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(Colors.white)
@@ -291,9 +290,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     if (platform is AndroidWebViewController) {
       AndroidWebViewController.enableDebugging(true);
       platform.setMediaPlaybackRequiresUserGesture(false);
-
-      // ★ تفعيل third-party cookies لحفظ الـ session
-      await platform.setThirdPartyCookiesEnabled(true);
 
       platform.setOnPlatformPermissionRequest((request) async {
         await Permission.camera.request();
@@ -407,7 +403,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
       _firstLoad = false;
     });
 
-    // ★ Fix Leaflet interactive map in Android WebView
     _wvc.runJavaScript(r'''
 (function() {
   function fixLeaflet() {
