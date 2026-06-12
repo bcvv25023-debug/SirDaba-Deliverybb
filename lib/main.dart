@@ -254,9 +254,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
 
     final platform = _wvc.platform;
     if (platform is AndroidWebViewController) {
-      // ★ تفعيل third-party cookies لضمان إرسال session cookies مع AJAX
-      platform.setThirdPartyCookiesEnabled(true);
-
       platform.setOnPlatformPermissionRequest((request) async {
         await Permission.camera.request();
         request.grant();
@@ -778,7 +775,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
   Widget build(BuildContext context) {
     return PopScope(
       canPop: false,
-      onPopInvokedWithResult: (didPop, result) async {
+      onPopInvoked: (didPop) async {
         if (didPop) return;
         if (await _wvc.canGoBack()) {
           _wvc.goBack();
