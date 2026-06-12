@@ -33,6 +33,7 @@ const AndroidNotificationChannel channel = AndroidNotificationChannel(
 
 const String kSiteUrl = 'https://sirdaba.delivery';
 const String kHomeUrl = '$kSiteUrl/';
+const String kLoginUrl = '$kSiteUrl/';
 const String kClientUrl = '$kSiteUrl/sirdaba-client/';
 const String kDistributorUrl = '$kSiteUrl/sirdaba-distributor/';
 const String kAppStatusUrl = '$kSiteUrl/wp-json/sirdaba/v1/mobile/app-status';
@@ -100,7 +101,6 @@ Future<String> _resolveInitialUrl() async {
     final prefs = await SharedPreferences.getInstance();
     final isLoggedOut = prefs.getBool(kPrefIsLoggedOut) ?? false;
     if (isLoggedOut) return kHomeUrl;
-
     final response = await http.get(
       Uri.parse(kAppStatusUrl),
       headers: {
@@ -108,13 +108,11 @@ Future<String> _resolveInitialUrl() async {
             'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 SirDabaApp/1.0 SirDaba-App-Android-Agent',
       },
     ).timeout(const Duration(seconds: 6));
-
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       final loggedIn = data['logged_in'] == true;
       final dashboardUrl = data['dashboard_url'] as String? ?? '';
       final userType = data['user_type'] as String? ?? '';
-
       if (loggedIn && dashboardUrl.isNotEmpty) {
         return dashboardUrl.endsWith('/') ? dashboardUrl : '$dashboardUrl/';
       }
@@ -172,7 +170,6 @@ class _SplashScreenState extends State<SplashScreen>
         parent: _ctrl,
         curve: const Interval(0.0, 0.5, curve: Curves.easeIn)));
     _ctrl.forward();
-
     Future.wait([
       _requestAllPermissions(),
       Future.delayed(const Duration(milliseconds: 1500)),
@@ -260,7 +257,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
   void _initWebView() {
     _wvc = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(Colors.white)
       ..setUserAgent(
           'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 SirDabaApp/1.0 SirDaba-App-Android-Agent')
       ..addJavaScriptChannel('SirDabaFlutter',
@@ -291,18 +287,12 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
 
     final platform = _wvc.platform;
     if (platform is AndroidWebViewController) {
-      AndroidWebViewController.enableDebugging(false);
+      AndroidWebViewController.enableDebugging(true);
       platform.setMediaPlaybackRequiresUserGesture(false);
-      // ✅ FIX MAP: يسمح لـ OpenStreetMap tiles بالتحميل داخل WebView
-      platform.setMixedContentMode(MixedContentMode.compatibilityMode);
-      // ✅ FIX MAP: يمنع WebView من تغيير zoom النص ويضمن layout صحيح للخريطة
-      platform.setTextZoom(100);
-
       platform.setOnPlatformPermissionRequest((request) async {
         await Permission.camera.request();
         request.grant();
       });
-
       platform.setOnShowFileSelector((params) async {
         try {
           await Permission.photos.request();
@@ -325,7 +315,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
           return const <String>[];
         }
       });
-
       platform.setGeolocationPermissionsPromptCallbacks(
         onShowPrompt: (request) async {
           LocationPermission perm = await Geolocator.checkPermission();
@@ -410,33 +399,47 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
       _firstLoad = false;
     });
 
-    // ✅ FIX MAP: invalidateSize من Flutter بعد تحميل صفحة التتبع
-    final isTrackingPage = url.contains('sirdaba-tracking');
-    if (isTrackingPage) {
-      Future.delayed(const Duration(milliseconds: 800), () {
-        _wvc.runJavaScript('''
+    // ★ Fix Leaflet interactive map in Android WebView
+    _wvc.runJavaScript(r'''
 (function() {
-  var s = window._sdTrackingMapState;
-  if (s && s.map) {
-    try { s.map.invalidateSize(true); } catch(e) {}
-  }
-  if (typeof window.sdBootTrackingWidgets === 'function') {
-    if (!s || !s.map) {
-      window.sdBootTrackingWidgets();
+  function fixLeaflet() {
+    if (typeof L !== 'undefined') {
+      try {
+        L.Browser.touch = true;
+        L.Browser.pointer = false;
+        L.Browser.mobile = true;
+        L.Browser.mobileWebkit = true;
+        L.Browser.mobileWebkit3d = true;
+      } catch(e) {}
     }
+    document.querySelectorAll('.leaflet-container').forEach(function(el) {
+      el.style.touchAction = 'none';
+      el.style.userSelect = 'none';
+      el.style.webkitUserSelect = 'none';
+      el.style.cursor = 'grab';
+    });
+  }
+  fixLeaflet();
+  setTimeout(fixLeaflet, 500);
+  setTimeout(fixLeaflet, 1500);
+  setTimeout(fixLeaflet, 3000);
+  var leafletObserver = new MutationObserver(function(mutations) {
+    mutations.forEach(function(m) {
+      m.addedNodes.forEach(function(node) {
+        if (node.nodeType === 1) {
+          if ((node.classList && node.classList.contains('leaflet-container')) ||
+              (node.querySelector && node.querySelector('.leaflet-container'))) {
+            setTimeout(fixLeaflet, 100);
+          }
+        }
+      });
+    });
+  });
+  if (document.body) {
+    leafletObserver.observe(document.body, { childList: true, subtree: true });
   }
 })();
 ''');
-      });
-      Future.delayed(const Duration(milliseconds: 1500), () {
-        _wvc.runJavaScript('''
-(function() {
-  var s = window._sdTrackingMapState;
-  if (s && s.map) { try { s.map.invalidateSize(true); } catch(e) {} }
-})();
-''');
-      });
-    }
 
     _wvc.runJavaScript(r'''
 (function() {
@@ -627,7 +630,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     try {
       if (currentValue.isNotEmpty) initialDate = DateTime.parse(currentValue);
     } catch (_) {}
-
     final pickedDate = await showDatePicker(
       context: context,
       initialDate: initialDate,
@@ -645,7 +647,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
       ),
     );
     if (pickedDate == null || !mounted) return;
-
     final pickedTime = await showTimePicker(
       context: context,
       initialTime: TimeOfDay.fromDateTime(initialDate),
@@ -660,7 +661,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
       ),
     );
     if (pickedTime == null || !mounted) return;
-
     final combined = DateTime(pickedDate.year, pickedDate.month, pickedDate.day,
         pickedTime.hour, pickedTime.minute);
     final formatted =
@@ -669,7 +669,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
         '${combined.day.toString().padLeft(2, '0')}T'
         '${combined.hour.toString().padLeft(2, '0')}:'
         '${combined.minute.toString().padLeft(2, '0')}';
-
     final escapedId = inputId.replaceAll("'", "\\'");
     final escapedName = inputName.replaceAll("'", "\\'");
     await _wvc.runJavaScript(
