@@ -254,9 +254,11 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     _initFCM();
   }
 
-  void _initWebView() {
+  // ★ async
+  Future<void> _initWebView() async {
     _wvc = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setBackgroundColor(Colors.white)
       ..setUserAgent(
           'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 SirDabaApp/1.0 SirDaba-App-Android-Agent')
       ..addJavaScriptChannel('SirDabaFlutter',
@@ -289,10 +291,15 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     if (platform is AndroidWebViewController) {
       AndroidWebViewController.enableDebugging(true);
       platform.setMediaPlaybackRequiresUserGesture(false);
+
+      // ★ تفعيل third-party cookies لحفظ الـ session
+      await platform.setThirdPartyCookiesEnabled(true);
+
       platform.setOnPlatformPermissionRequest((request) async {
         await Permission.camera.request();
         request.grant();
       });
+
       platform.setOnShowFileSelector((params) async {
         try {
           await Permission.photos.request();
@@ -315,6 +322,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
           return const <String>[];
         }
       });
+
       platform.setGeolocationPermissionsPromptCallbacks(
         onShowPrompt: (request) async {
           LocationPermission perm = await Geolocator.checkPermission();
