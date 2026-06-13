@@ -32,8 +32,6 @@ const AndroidNotificationChannel channel = AndroidNotificationChannel(
 );
 
 const String kSiteUrl = 'https://sirdaba.delivery';
-
-// ★ endpoint التحقق من حالة التطبيق والتوجيه الصحيح
 const String kAppStatusUrl = '$kSiteUrl/wp-json/sirdaba/v1/mobile/app-status';
 
 Future<void> main() async {
@@ -93,7 +91,6 @@ bool _isExternalUrl(String url) {
       url.startsWith('twitter:');
 }
 
-// ★ جلب الصفحة الصحيحة للانطلاق حسب حالة المستخدم
 Future<String> _resolveStartUrl() async {
   try {
     final response = await http
@@ -117,7 +114,6 @@ Future<String> _resolveStartUrl() async {
   } catch (e) {
     debugPrint('App status check failed: $e');
   }
-  // fallback: الصفحة الرئيسية
   return '$kSiteUrl/sirdaba-home/';
 }
 
@@ -173,7 +169,6 @@ class _SplashScreenState extends State<SplashScreen>
       _requestAllPermissions(),
       Future.delayed(const Duration(milliseconds: 1500)),
     ]).then((_) async {
-      // ★ نحدد الصفحة الصحيحة قبل الانتقال
       final startUrl = await _resolveStartUrl();
       if (mounted) {
         Navigator.of(context).pushReplacement(PageRouteBuilder(
@@ -231,7 +226,6 @@ class _SplashScreenState extends State<SplashScreen>
 }
 
 class MainWebViewScreen extends StatefulWidget {
-  // ★ startUrl يأتي من _resolveStartUrl()
   final String startUrl;
   const MainWebViewScreen({super.key, required this.startUrl});
   @override
@@ -284,12 +278,10 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
           return NavigationDecision.navigate;
         },
       ))
-      // ★ نستخدم startUrl المحدد من app-status
       ..loadRequest(Uri.parse(widget.startUrl));
 
     final platform = _wvc.platform;
     if (platform is AndroidWebViewController) {
-      // ★ تفعيل third-party cookies (ضروري للـ Leaflet tiles و CDN resources)
       AndroidWebViewController.enableDebugging(false);
       platform.setMediaPlaybackRequiresUserGesture(false);
 
@@ -420,7 +412,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
       _firstLoad = false;
     });
 
-    // ★ بعد تحميل أي صفحة تتبع، نعمل invalidateSize للخريطة
     _wvc.runJavaScript(r'''
       (function() {
         // ===== Map invalidate fix for WebView =====
@@ -431,6 +422,11 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
             var state = window._sdTrackingMapState;
             if (state && state.map) {
               try { state.map.invalidateSize(true); } catch(e) {}
+              try {
+                if (typeof window.sdForceRefreshTrackingMap === 'function') {
+                  window.sdForceRefreshTrackingMap();
+                }
+              } catch(e) {}
               clearInterval(mapFix);
               return;
             }
