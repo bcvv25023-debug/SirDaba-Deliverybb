@@ -33,6 +33,9 @@ const AndroidNotificationChannel channel = AndroidNotificationChannel(
 
 const String kSiteUrl = 'https://sirdaba.delivery';
 
+// ★ endpoint التحقق من حالة التطبيق والتوجيه الصحيح
+const String kAppStatusUrl = '$kSiteUrl/wp-json/sirdaba/v1/mobile/app-status';
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
@@ -90,6 +93,34 @@ bool _isExternalUrl(String url) {
       url.startsWith('twitter:');
 }
 
+// ★ جلب الصفحة الصحيحة للانطلاق حسب حالة المستخدم
+Future<String> _resolveStartUrl() async {
+  try {
+    final response = await http
+        .get(Uri.parse(kAppStatusUrl), headers: {
+          'User-Agent':
+              'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 SirDabaApp/1.0 SirDaba-App-Android-Agent',
+        })
+        .timeout(const Duration(seconds: 8));
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final role = data['role'] as String? ?? 'guest';
+      final redirectUrl = data['redirect_url'] as String?;
+
+      if (redirectUrl != null && redirectUrl.isNotEmpty) {
+        return redirectUrl;
+      }
+      if (role == 'client') return '$kSiteUrl/sirdaba-client/';
+      if (role == 'distributor') return '$kSiteUrl/sirdaba-distributor/';
+    }
+  } catch (e) {
+    debugPrint('App status check failed: $e');
+  }
+  // fallback: الصفحة الرئيسية
+  return '$kSiteUrl/sirdaba-home/';
+}
+
 class SirDabaApp extends StatelessWidget {
   const SirDabaApp({super.key});
   @override
@@ -141,10 +172,12 @@ class _SplashScreenState extends State<SplashScreen>
     Future.wait([
       _requestAllPermissions(),
       Future.delayed(const Duration(milliseconds: 1500)),
-    ]).then((_) {
+    ]).then((_) async {
+      // ★ نحدد الصفحة الصحيحة قبل الانتقال
+      final startUrl = await _resolveStartUrl();
       if (mounted) {
         Navigator.of(context).pushReplacement(PageRouteBuilder(
-          pageBuilder: (_, __, ___) => const MainWebViewScreen(),
+          pageBuilder: (_, __, ___) => MainWebViewScreen(startUrl: startUrl),
           transitionsBuilder: (_, a, __, c) =>
               FadeTransition(opacity: a, child: c),
           transitionDuration: const Duration(milliseconds: 400),
@@ -198,7 +231,9 @@ class _SplashScreenState extends State<SplashScreen>
 }
 
 class MainWebViewScreen extends StatefulWidget {
-  const MainWebViewScreen({super.key});
+  // ★ startUrl يأتي من _resolveStartUrl()
+  final String startUrl;
+  const MainWebViewScreen({super.key, required this.startUrl});
   @override
   State<MainWebViewScreen> createState() => _MainWebViewScreenState();
 }
@@ -208,7 +243,6 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
   bool _loading = true;
   bool _firstLoad = true;
   String? _fcmToken;
-  String _appToken = '';
   bool _tokenRegistered = false;
   final ImagePicker _imagePicker = ImagePicker();
 
@@ -250,10 +284,15 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
           return NavigationDecision.navigate;
         },
       ))
-      ..loadRequest(Uri.parse('$kSiteUrl/sirdaba-client/'));
+      // ★ نستخدم startUrl المحدد من app-status
+      ..loadRequest(Uri.parse(widget.startUrl));
 
     final platform = _wvc.platform;
     if (platform is AndroidWebViewController) {
+      // ★ تفعيل third-party cookies (ضروري للـ Leaflet tiles و CDN resources)
+      AndroidWebViewController.enableDebugging(false);
+      platform.setMediaPlaybackRequiresUserGesture(false);
+
       platform.setOnPlatformPermissionRequest((request) async {
         await Permission.camera.request();
         request.grant();
@@ -381,8 +420,24 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
       _firstLoad = false;
     });
 
+    // ★ بعد تحميل أي صفحة تتبع، نعمل invalidateSize للخريطة
     _wvc.runJavaScript(r'''
       (function() {
+        // ===== Map invalidate fix for WebView =====
+        if (document.getElementById('sdLiveTrackingMap')) {
+          var attempts = 0;
+          var mapFix = setInterval(function() {
+            attempts++;
+            var state = window._sdTrackingMapState;
+            if (state && state.map) {
+              try { state.map.invalidateSize(true); } catch(e) {}
+              clearInterval(mapFix);
+              return;
+            }
+            if (attempts >= 15) clearInterval(mapFix);
+          }, 400);
+        }
+
         // ===== Geolocation patch =====
         if (typeof window._sirdabaGeoPatched === 'undefined') {
           window._sirdabaGeoPatched = true;
@@ -411,13 +466,9 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
           function patchDateInput(input) {
             if (input._sirdabaPatched) return;
             input._sirdabaPatched = true;
-
             var _opening = false;
-
             function openPicker(e) {
-              e.preventDefault();
-              e.stopPropagation();
-              e.stopImmediatePropagation();
+              e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
               if (_opening) return;
               _opening = true;
               setTimeout(function() { _opening = false; }, 800);
@@ -430,26 +481,16 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
               }));
               return false;
             }
-
             input.addEventListener('mousedown', function(e) {
-              e.preventDefault();
-              e.stopPropagation();
-              e.stopImmediatePropagation();
-              return false;
+              e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); return false;
             }, true);
             input.addEventListener('touchstart', function(e) {
-              e.preventDefault();
-              e.stopPropagation();
-              e.stopImmediatePropagation();
-              return false;
+              e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); return false;
             }, true);
             input.addEventListener('click', openPicker, true);
             input.addEventListener('focus', function(e) {
-              e.preventDefault();
-              e.stopPropagation();
-              e.stopImmediatePropagation();
-              input.blur();
-              return false;
+              e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+              input.blur(); return false;
             }, true);
           }
 
@@ -459,12 +500,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
             mutations.forEach(function(m) {
               m.addedNodes.forEach(function(node) {
                 if (node.nodeType === 1) {
-                  if (node.matches && node.matches('input[type="datetime-local"]')) {
-                    patchDateInput(node);
-                  }
-                  if (node.querySelectorAll) {
-                    node.querySelectorAll('input[type="datetime-local"]').forEach(patchDateInput);
-                  }
+                  if (node.matches && node.matches('input[type="datetime-local"]')) patchDateInput(node);
+                  if (node.querySelectorAll) node.querySelectorAll('input[type="datetime-local"]').forEach(patchDateInput);
                 }
               });
             });
@@ -485,50 +522,22 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
           };
         }
 
-        // ===== App token + jQuery AJAX intercept =====
-        (function injectAppToken() {
-          var appToken = '';
-          var cookies = document.cookie.split(';');
-          for (var i = 0; i < cookies.length; i++) {
-            var c = cookies[i].trim();
-            if (c.startsWith('sirdaba_app_token=')) {
-              appToken = c.substring('sirdaba_app_token='.length);
-              break;
-            }
+        // ===== App token =====
+        var appToken = '';
+        var cookies = document.cookie.split(';');
+        for (var i = 0; i < cookies.length; i++) {
+          var c = cookies[i].trim();
+          if (c.startsWith('sirdaba_app_token=')) {
+            appToken = c.substring('sirdaba_app_token='.length);
+            break;
           }
-
-          if (appToken) {
-            window.SirDabaFlutter.postMessage(JSON.stringify({
-              type: 'app_token',
-              token: decodeURIComponent(appToken)
-            }));
-          }
-
-          if (typeof window.sirdaba_ajax !== 'undefined' && appToken) {
-            window.sirdaba_ajax.app_token = decodeURIComponent(appToken);
-          }
-
-          if (typeof window.$ !== 'undefined' && typeof window.$.ajaxPrefilter === 'function') {
-            if (!window._sirdabaAjaxPatched) {
-              window._sirdabaAjaxPatched = true;
-              var resolvedToken = appToken ? decodeURIComponent(appToken) : '';
-              window.$.ajaxPrefilter(function(options, originalOptions, jqXHR) {
-                if (options.url && options.url.indexOf('admin-ajax.php') !== -1) {
-                  var token = resolvedToken ||
-                    (window.sirdaba_ajax && window.sirdaba_ajax.app_token ? window.sirdaba_ajax.app_token : '');
-                  if (token) {
-                    if (typeof options.data === 'string') {
-                      options.data += '&sd_app_token=' + encodeURIComponent(token);
-                    } else if (options.data && typeof options.data === 'object') {
-                      options.data.sd_app_token = token;
-                    }
-                  }
-                }
-              });
-            }
-          }
-        })();
-
+        }
+        if (appToken) {
+          window.SirDabaFlutter.postMessage(JSON.stringify({
+            type: 'app_token',
+            token: decodeURIComponent(appToken)
+          }));
+        }
       })();
     ''');
   }
@@ -540,11 +549,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
 
       if (type == 'app_token') {
         final appToken = data['token'] as String? ?? '';
-        if (appToken.isNotEmpty) {
-          _appToken = appToken;
-          if (_fcmToken != null && !_tokenRegistered) {
-            _sendFcmTokenToServer(_fcmToken!);
-          }
+        if (appToken.isNotEmpty && _fcmToken != null && !_tokenRegistered) {
+          _registerFcmTokenWithAuth(_fcmToken!, appToken);
         }
       } else if (type == 'get_location') {
         await _provideLocationToWebView();
@@ -565,9 +571,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
   }) async {
     DateTime initialDate = DateTime.now();
     try {
-      if (currentValue.isNotEmpty) {
-        initialDate = DateTime.parse(currentValue);
-      }
+      if (currentValue.isNotEmpty) initialDate = DateTime.parse(currentValue);
     } catch (_) {}
 
     final pickedDate = await showDatePicker(
@@ -602,10 +606,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
               onPrimary: Colors.white,
             ),
           ),
-          child: Directionality(
-            textDirection: TextDirection.rtl,
-            child: child!,
-          ),
+          child: Directionality(textDirection: TextDirection.rtl, child: child!),
         );
       },
     );
@@ -613,11 +614,8 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     if (pickedTime == null || !mounted) return;
 
     final combined = DateTime(
-      pickedDate.year,
-      pickedDate.month,
-      pickedDate.day,
-      pickedTime.hour,
-      pickedTime.minute,
+      pickedDate.year, pickedDate.month, pickedDate.day,
+      pickedTime.hour, pickedTime.minute,
     );
 
     final formatted =
@@ -684,10 +682,7 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
   Future<void> _initFCM() async {
     final m = FirebaseMessaging.instance;
     await m.requestPermission(
-      alert: true,
-      badge: true,
-      sound: true,
-      provisional: false,
+      alert: true, badge: true, sound: true, provisional: false,
     );
     await flutterLocalNotificationsPlugin
         .resolvePlatformSpecificImplementation<
@@ -700,13 +695,10 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
       final n = msg.notification;
       if (n != null) {
         flutterLocalNotificationsPlugin.show(
-          n.hashCode,
-          n.title,
-          n.body,
+          n.hashCode, n.title, n.body,
           NotificationDetails(
             android: AndroidNotificationDetails(
-              channel.id,
-              channel.name,
+              channel.id, channel.name,
               channelDescription: channel.description,
               importance: Importance.max,
               priority: Priority.high,
@@ -733,26 +725,20 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     } catch (_) {}
   }
 
+  Future<void> _registerFcmTokenWithAuth(
+      String fcmToken, String appToken) async {
+    await _sendFcmTokenToServer(fcmToken);
+  }
+
   Future<void> _sendFcmTokenToServer(String fcmToken) async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final lastRegistered = prefs.getString('fcm_token_registered') ?? '';
       if (lastRegistered == fcmToken) return;
-
-      final headers = <String, String>{
-        'Content-Type': 'application/x-www-form-urlencoded',
-      };
-      if (_appToken.isNotEmpty) {
-        headers['Authorization'] = 'Bearer $_appToken';
-      }
-
       final response = await http.post(
         Uri.parse('$kSiteUrl/wp-json/sirdaba/v1/mobile/register-fcm-token'),
-        headers: headers,
-        body: {
-          'fcm_token': fcmToken,
-          'platform': 'android',
-        },
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: {'fcm_token': fcmToken, 'platform': 'android'},
       );
       if (response.statusCode == 200) {
         _tokenRegistered = true;
@@ -771,16 +757,18 @@ class _MainWebViewScreenState extends State<MainWebViewScreen> {
     if (url != null) _wvc.loadRequest(Uri.parse(url));
   }
 
+  Future<bool> _onBack() async {
+    if (await _wvc.canGoBack()) {
+      _wvc.goBack();
+      return false;
+    }
+    return true;
+  }
+
   @override
   Widget build(BuildContext context) {
-    return PopScope(
-      canPop: false,
-      onPopInvoked: (didPop) async {
-        if (didPop) return;
-        if (await _wvc.canGoBack()) {
-          _wvc.goBack();
-        }
-      },
+    return WillPopScope(
+      onWillPop: _onBack,
       child: Scaffold(
         backgroundColor: Colors.white,
         body: SafeArea(
